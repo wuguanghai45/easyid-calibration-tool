@@ -51,6 +51,7 @@ class ScannerReader:
 
     def enum_devices(self) -> list[dict[str, Any]]:
         device_list = EasyID.EidDeviceList()
+        print(device_list, 111)
         check_ret(
             EasyID.Camera.eidEnumDevices(device_list, EasyID.EidInterfaceType.eidInterfaceTypeAll),
             "eidEnumDevices",
