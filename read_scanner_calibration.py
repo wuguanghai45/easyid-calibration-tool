@@ -16,6 +16,15 @@ def parse_args() -> argparse.Namespace:
     target_group = parser.add_mutually_exclusive_group(required=True)
     target_group.add_argument("--sn", help="Scanner serial number.")
     target_group.add_argument("--ip", help="Scanner IPv4 address.")
+    target_group.add_argument(
+        "--list-devices",
+        action="store_true",
+        help="List discovered scanner devices and exit.",
+    )
+    parser.add_argument(
+        "--interface",
+        help="Host NIC name filter (matches SDK interface_name).",
+    )
 
     parser.add_argument(
         "--output",
@@ -62,26 +71,68 @@ def make_session_dir(base_output: Path, identity: str) -> Path:
     return session_dir
 
 
+def _print_device_table(devices: list[dict[str, str]]) -> None:
+    headers = ["#", "serial_number", "ip_address", "interface_name", "model_name", "mac_address"]
+    rows: list[list[str]] = []
+    for idx, dev in enumerate(devices, start=1):
+        rows.append(
+            [
+                str(idx),
+                dev.get("serial_number", ""),
+                dev.get("ip_address", ""),
+                dev.get("interface_name", ""),
+                dev.get("model_name", ""),
+                dev.get("mac_address", ""),
+            ]
+        )
+
+    widths = [len(header) for header in headers]
+    for row in rows:
+        for i, value in enumerate(row):
+            widths[i] = max(widths[i], len(value))
+
+    header_line = " | ".join(header.ljust(widths[i]) for i, header in enumerate(headers))
+    divider_line = "-+-".join("-" * widths[i] for i in range(len(headers)))
+    print(header_line)
+    print(divider_line)
+    for row in rows:
+        print(" | ".join(value.ljust(widths[i]) for i, value in enumerate(row)))
+
+
 def main() -> int:
     setup_logging()
     args = parse_args()
     from scanner_reader import CaptureOptions, ScannerReader
     from scanner_utils import write_json
 
-    identity = args.sn or args.ip
-    base_output = Path(args.output).expanduser().resolve()
-    session_dir = make_session_dir(base_output, identity)
-    logging.info("Session output: %s", session_dir)
-
     reader = ScannerReader()
-    capture_options = CaptureOptions(
-        timeout_ms=args.timeout_ms,
-        buffer_count=args.buffer_count,
-        clear_buffer=not args.no_clear_buffer,
-    )
 
     try:
-        device_info = reader.connect(serial_number=args.sn, ip=args.ip)
+        if args.list_devices:
+            devices = reader.enum_devices()
+            if args.interface:
+                needle = args.interface.casefold()
+                devices = [
+                    dev for dev in devices if needle in str(dev.get("interface_name", "")).casefold()
+                ]
+            if not devices:
+                logging.info("No scanner device found.")
+                return 0
+            _print_device_table(devices)
+            return 0
+
+        identity = args.sn or args.ip
+        base_output = Path(args.output).expanduser().resolve()
+        session_dir = make_session_dir(base_output, identity)
+        logging.info("Session output: %s", session_dir)
+
+        capture_options = CaptureOptions(
+            timeout_ms=args.timeout_ms,
+            buffer_count=args.buffer_count,
+            clear_buffer=not args.no_clear_buffer,
+        )
+
+        device_info = reader.connect(serial_number=args.sn, ip=args.ip, interface_name=args.interface)
         write_json(session_dir / "device_info.json", device_info)
         logging.info("Device connected: %s", device_info.get("serial_number") or "unknown")
 

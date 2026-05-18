@@ -49,39 +49,82 @@ class ScannerReader:
         self.connected = False
         self.device_info: EasyID.EidDeviceInfo | None = None
 
-    def connect(self, *, serial_number: str | None = None, ip: str | None = None) -> dict[str, Any]:
-        target = serial_number or ip
-        if not target:
-            raise ValueError("Either serial_number or ip is required.")
-
+    def enum_devices(self) -> list[dict[str, Any]]:
         device_list = EasyID.EidDeviceList()
         check_ret(
             EasyID.Camera.eidEnumDevices(device_list, EasyID.EidInterfaceType.eidInterfaceTypeAll),
             "eidEnumDevices",
         )
-        if device_list.num <= 0:
+        devices: list[dict[str, Any]] = []
+        for idx in range(device_list.num):
+            devices.append(self.device_info_to_dict(device_list.infos[idx]))
+        return devices
+
+    def find_device(
+        self,
+        *,
+        serial_number: str | None = None,
+        ip: str | None = None,
+        interface_name: str | None = None,
+    ) -> dict[str, Any]:
+        target = serial_number or ip
+        if not target:
+            raise ValueError("Either serial_number or ip is required.")
+
+        devices = self.enum_devices()
+        if not devices:
             raise RuntimeError("No scanner device found.")
 
-        matched = None
-        for idx in range(device_list.num):
-            info = device_list.infos[idx]
-            if serial_number and decode_cstr(info.serialNumber) == serial_number:
-                matched = info
-                break
-            if ip and decode_cstr(info.gigeDeviceInfo.ipAddress) == ip:
-                matched = info
-                break
+        matched_devices = [
+            dev
+            for dev in devices
+            if (serial_number and dev["serial_number"] == serial_number)
+            or (ip and dev["ip_address"] == ip)
+        ]
 
-        if matched is None:
+        if interface_name:
+            needle = interface_name.casefold()
+            matched_devices = [
+                dev for dev in matched_devices if needle in dev["interface_name"].casefold()
+            ]
+
+        if not matched_devices:
             raise RuntimeError(f"Device not found for target={target}")
 
-        create_data = serial_number or ip or ""
-        create_type = (
-            EasyID.EidDeviceDataType.eidDeviceDataTypeSN
-            if serial_number
-            else EasyID.EidDeviceDataType.eidDeviceDataTypeIP
+        if len(matched_devices) > 1 and not interface_name:
+            interface_hint = ", ".join(
+                sorted({dev["interface_name"] or "unknown" for dev in matched_devices})
+            )
+            raise RuntimeError(
+                "Multiple devices matched target "
+                f"{target} on interfaces [{interface_hint}]. "
+                "Please specify --interface or run --list-devices."
+            )
+        return matched_devices[0]
+
+    def connect(
+        self,
+        *,
+        serial_number: str | None = None,
+        ip: str | None = None,
+        interface_name: str | None = None,
+    ) -> dict[str, Any]:
+        matched = self.find_device(
+            serial_number=serial_number,
+            ip=ip,
+            interface_name=interface_name,
         )
-        check_ret(self.camera.eidCreateDevice(create_data.encode("ascii"), create_type), "eidCreateDevice")
+        device_id = matched.get("device_id") or ""
+        if not device_id:
+            raise RuntimeError("Matched device has empty device_id, cannot create device handle.")
+
+        check_ret(
+            self.camera.eidCreateDevice(
+                device_id.encode("ascii"),
+                EasyID.EidDeviceDataType.eidDeviceDataTypeID,
+            ),
+            "eidCreateDevice",
+        )
         check_ret(self.camera.eidOpenDevice(), "eidOpenDevice")
         self.connected = True
 

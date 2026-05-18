@@ -65,10 +65,32 @@ python read_scanner_calibration.py --ip 192.168.1.100
 
 `--sn` 与 `--ip` 二选一，必填其一。
 
+仅列举当前可发现设备（不采集）：
+
+```bash
+python read_scanner_calibration.py --list-devices
+```
+
+### 双网卡场景（推荐流程）
+
+1. 先列举设备，确认目标设备对应的 `interface_name`：
+
+```bash
+python read_scanner_calibration.py --list-devices
+```
+
+2. 采集时指定网卡名，避免双网卡走错路径：
+
+```bash
+python read_scanner_calibration.py --ip 192.168.1.100 --interface "以太网 2"
+```
+
 ### 常用参数
 
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
+| `--list-devices` | 关闭 | 仅枚举设备并打印列表后退出 |
+| `--interface` | 空 | 按 SDK 返回的 `interface_name` 过滤网卡（支持子串匹配） |
 | `--output` | `./calibration_out` | 输出根目录；每次运行在其下新建带时间戳的子目录 |
 | `--timeout-ms` | `2000` | 取帧超时（毫秒） |
 | `--buffer-count` | `3` | SDK 采集缓冲区数量 |
