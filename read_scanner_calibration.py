@@ -6,6 +6,8 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import logging
+import os
+import socket
 from pathlib import Path
 
 
@@ -24,6 +26,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--interface",
         help="Host NIC name filter (matches SDK interface_name).",
+    )
+    parser.add_argument(
+        "--diag",
+        action="store_true",
+        help="Print extra diagnostics when no device is discovered in --list-devices mode.",
     )
 
     parser.add_argument(
@@ -99,6 +106,45 @@ def _print_device_table(devices: list[dict[str, str]]) -> None:
         print(" | ".join(value.ljust(widths[i]) for i, value in enumerate(row)))
 
 
+def _collect_local_ipv4_addresses() -> list[str]:
+    host_name = socket.gethostname()
+    addresses = set()
+    try:
+        for result in socket.getaddrinfo(host_name, None, socket.AF_INET, socket.SOCK_DGRAM):
+            ip = result[4][0]
+            if ip and ip != "127.0.0.1":
+                addresses.add(ip)
+    except Exception:
+        pass
+    return sorted(addresses)
+
+
+def _print_discovery_diagnostics() -> None:
+    sdk_version = "unknown"
+    try:
+        import EasyID
+
+        raw = EasyID.Camera.eidGetVersion()
+        if isinstance(raw, bytes):
+            sdk_version = raw.decode("utf-8", errors="replace")
+        elif raw is not None:
+            sdk_version = str(raw)
+    except Exception as exc:
+        sdk_version = f"unavailable ({exc})"
+
+    host_name = socket.gethostname()
+    ipv4_list = _collect_local_ipv4_addresses()
+    runenv64 = os.environ.get("EASYID_RUNENV_64", "")
+    runenv32 = os.environ.get("EASYID_RUNENV_32", "")
+
+    logging.info("Diagnostic mode enabled:")
+    logging.info("  sdk_version: %s", sdk_version)
+    logging.info("  hostname: %s", host_name)
+    logging.info("  local_ipv4: %s", ", ".join(ipv4_list) if ipv4_list else "(none)")
+    logging.info("  EASYID_RUNENV_64: %s", runenv64 or "(not set)")
+    logging.info("  EASYID_RUNENV_32: %s", runenv32 or "(not set)")
+
+
 def main() -> int:
     setup_logging()
     args = parse_args()
@@ -117,6 +163,8 @@ def main() -> int:
                 ]
             if not devices:
                 logging.info("No scanner device found.")
+                if args.diag:
+                    _print_discovery_diagnostics()
                 return 0
             _print_device_table(devices)
             return 0
