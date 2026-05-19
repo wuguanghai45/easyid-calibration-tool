@@ -43,14 +43,30 @@ def _fetch_single_url(device: GvcpDevice, url: str) -> str:
         filename, addr_hex, size_hex = local_match.groups()
         address = _parse_hex_or_prefixed_int(addr_hex)
         size = _parse_hex_or_prefixed_int(size_hex)
-        payload = device.read_memory_chunked(address, size, chunk_size=512)
+        payload = device.read_memory_chunked(address, size, chunk_size=0x200)
         if filename.lower().endswith(".zip") or b"PK\x03\x04" in payload[:32]:
             try:
                 return _decode_xml_from_zip(payload)
             except Exception:
-                # Fallback for mislabeled *.zip payloads.
-                return _decode_xml_text(payload)
-        return _decode_xml_text(payload)
+                pass
+        try:
+            return _decode_xml_text(payload)
+        except Exception:
+            pass
+        # Fallback: some devices expose local file through HTTP endpoint.
+        for suffix in (filename, f"xml/{filename}", f"XML/{filename}"):
+            try:
+                with urllib.request.urlopen(f"http://{device.device_ip}/{suffix}", timeout=5) as response:  # nosec B310
+                    body = response.read()
+                if filename.lower().endswith(".zip") or body.startswith(b"PK\x03\x04"):
+                    try:
+                        return _decode_xml_from_zip(body)
+                    except Exception:
+                        pass
+                return _decode_xml_text(body)
+            except Exception:
+                continue
+        raise RuntimeError(f"Failed to fetch local GenICam resource: {url}")
 
     if normalized.lower().startswith(("http://", "https://")):
         with urllib.request.urlopen(normalized, timeout=5) as response:  # nosec B310

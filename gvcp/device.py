@@ -49,7 +49,12 @@ class GvcpDevice:
         offset = 0
         while remaining > 0:
             current = min(remaining, chunk_size)
-            part = self.read_memory(address + offset, current)
+            try:
+                part = self.read_memory(address + offset, current)
+            except Exception:
+                if chunks:
+                    break
+                raise
             if len(part) < current:
                 # Some devices cap per-read length; stop on short read to avoid endless retries.
                 chunks.append(part)
