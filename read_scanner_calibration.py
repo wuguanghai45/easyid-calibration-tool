@@ -31,6 +31,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Print extra diagnostics for GVCP/GVSP workflow.",
     )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Enable verbose debug logs for protocol analysis.",
+    )
 
     parser.add_argument(
         "--output",
@@ -131,8 +136,11 @@ def _print_discovery_diagnostics(reader: object | None = None) -> None:
 
 
 def main() -> int:
-    setup_logging()
     args = parse_args()
+    setup_logging()
+    if args.debug:
+        logging.getLogger().setLevel(logging.DEBUG)
+        logging.debug("Debug logging enabled")
     base_output = Path(args.output).expanduser()
     if not base_output.is_absolute():
         base_output = (Path.cwd() / base_output).resolve()
