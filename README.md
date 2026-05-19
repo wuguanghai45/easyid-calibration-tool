@@ -24,11 +24,21 @@
 
 ### 安装 MVSDK 原生库
 
-将厂商提供的运行时库放到以下任一位置，或设置环境变量 `IMV_SDK_LIB` 为库的**绝对路径**：
+**Windows（推荐）**：将厂商 SDK 包中 `Runtime/x64/` 下的文件复制到本项目同名目录：
+
+```text
+easyid-calibration-tool/Runtime/x64/MVSDKmd.dll
+```
+
+仓库已按此布局放置主库；若启动报缺少依赖 DLL，请把安装包内 **整个** `Runtime/x64` 目录一并复制过来。
+
+也可设置环境变量 `IMV_SDK_LIB` 指向 `MVSDKmd.dll` 的绝对路径（优先级更高）。
+
+Windows 下通过 `kernel32.LoadLibraryW` 加载，并自动将 `Runtime/x64` 加入 DLL 搜索路径。
 
 | 平台 | 默认搜索路径 |
 |------|----------------|
-| Windows x64 | `Runtime/x64/MVSDKmd.dll` |
+| Windows x64 | [`Runtime/x64/MVSDKmd.dll`](Runtime/x64/MVSDKmd.dll) |
 | Linux | `lib/libMVSDK.so` |
 
 详细说明见 [`SDKPython/sdk.pdf`](SDKPython/sdk.pdf)。
@@ -153,6 +163,7 @@ easyid-calibration-tool/
 ├── scanner_reader.py             # 采集流程编排
 ├── scanner/                      # IMV 业务模块
 ├── imv_sdk/                      # MVSDK Python 封装
+├── Runtime/x64/                  # MVSDKmd.dll（Windows x64）
 ├── scanner_config.py             # GenICam 特征名候选
 ├── scanner_utils.py
 ├── SDKPython/                    # 厂商示例与 sdk.pdf（参考）

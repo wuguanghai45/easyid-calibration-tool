@@ -5,13 +5,9 @@ from __future__ import annotations
 import os
 import platform
 import sys
-from ctypes import CDLL
+from ctypes import CDLL, WinDLL, get_last_error, windll
+from ctypes import wintypes
 from pathlib import Path
-
-if sys.platform == "win32":
-    from ctypes import WinDLL
-else:
-    WinDLL = None  # type: ignore[misc, assignment]
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
@@ -33,7 +29,33 @@ def _candidate_paths() -> list[Path]:
         yield _PROJECT_ROOT / "SDKPython" / "lib" / "libMVSDK.so"
 
 
-def load_mvsdk_library():
+def _register_windows_dll_directory(dll_dir: str) -> None:
+    """Add SDK directory to DLL search path so dependent DLLs resolve."""
+    if hasattr(os, "add_dll_directory"):
+        os.add_dll_directory(dll_dir)
+    else:
+        os.environ["PATH"] = dll_dir + os.pathsep + os.environ.get("PATH", "")
+
+
+def _load_windows_mvsdk(path: Path) -> WinDLL:
+    """Load MVSDKmd.dll via kernel32.LoadLibraryW and wrap with ctypes WinDLL."""
+    abs_path = str(path.resolve())
+    _register_windows_dll_directory(str(path.parent.resolve()))
+
+    kernel32 = windll.kernel32
+    kernel32.LoadLibraryW.argtypes = [wintypes.LPCWSTR]
+    kernel32.LoadLibraryW.restype = wintypes.HMODULE
+
+    handle = kernel32.LoadLibraryW(abs_path)
+    if not handle:
+        err_code = get_last_error()
+        raise OSError(err_code, f"LoadLibraryW failed for {abs_path}")
+
+    # WinDLL = stdcall, matching vendor IMVApi.py; handle avoids loading twice.
+    return WinDLL(abs_path, handle=handle, use_last_error=True)
+
+
+def load_mvsdk_library() -> WinDLL | CDLL:
     """Return loaded MVSDK DLL/so or raise RuntimeError with setup hints."""
     if sys.platform == "darwin":
         raise RuntimeError(
@@ -47,8 +69,8 @@ def load_mvsdk_library():
             continue
         try:
             if sys.platform == "win32":
-                return WinDLL(str(path))
-            return CDLL(str(path))
+                return _load_windows_mvsdk(path)
+            return CDLL(str(path.resolve()))
         except OSError as exc:
             last_error = exc
 
