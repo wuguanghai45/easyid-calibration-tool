@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import logging
-import os
 import socket
 from pathlib import Path
 
@@ -21,7 +20,7 @@ def parse_args() -> argparse.Namespace:
     target_group.add_argument(
         "--list-devices",
         action="store_true",
-        help="List GigE devices via GVCP discovery (replaces SDK eidEnumDevices) and exit.",
+        help="List GigE devices via GVCP discovery and exit.",
     )
     parser.add_argument(
         "--interface",
@@ -30,7 +29,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--diag",
         action="store_true",
-        help="Print extra diagnostics (GVCP + optional SDK eidEnumDevices probe).",
+        help="Print extra diagnostics for GVCP/GVSP workflow.",
     )
 
     parser.add_argument(
@@ -48,12 +47,12 @@ def parse_args() -> argparse.Namespace:
         "--buffer-count",
         type=int,
         default=3,
-        help="SDK frame buffer count for grabbing.",
+        help="Reserved for GVSP buffer sizing (currently informational).",
     )
     parser.add_argument(
         "--no-clear-buffer",
         action="store_true",
-        help="Do not call eidClearFrameBuffer before capture.",
+        help="Reserved compatibility flag in pure GVCP mode.",
     )
     parser.add_argument(
         "--dump-features",
@@ -120,45 +119,20 @@ def _collect_local_ipv4_addresses() -> list[str]:
 
 
 def _print_discovery_diagnostics(reader: object | None = None) -> None:
-    sdk_version = "unknown"
-    try:
-        import EasyID
-
-        raw = EasyID.Camera.eidGetVersion()
-        if isinstance(raw, bytes):
-            sdk_version = raw.decode("utf-8", errors="replace")
-        elif raw is not None:
-            sdk_version = str(raw)
-    except Exception as exc:
-        sdk_version = f"unavailable ({exc})"
-
     host_name = socket.gethostname()
     ipv4_list = _collect_local_ipv4_addresses()
-    runenv64 = os.environ.get("EASYID_RUNENV_64", "")
-    runenv32 = os.environ.get("EASYID_RUNENV_32", "")
 
     logging.info("Diagnostic mode enabled:")
-    logging.info("  sdk_version: %s", sdk_version)
     logging.info("  hostname: %s", host_name)
     logging.info("  local_ipv4: %s", ", ".join(ipv4_list) if ipv4_list else "(none)")
-    logging.info("  EASYID_RUNENV_64: %s", runenv64 or "(not set)")
-    logging.info("  EASYID_RUNENV_32: %s", runenv32 or "(not set)")
-    sdk_root = getattr(EasyID, "EASYID_SDK_ROOT", None)
-    if sdk_root is not None:
-        logging.info("  resolved_sdk_root: %s", sdk_root)
     if reader is not None:
         gvcp_devices = reader.enum_devices()
         logging.info("  gvcp_device_count: %d", len(gvcp_devices))
-        if hasattr(reader, "enum_sdk_devices_diagnostics"):
-            logging.info("  SDK eidEnumDevices probe (optional):")
-            for line in reader.enum_sdk_devices_diagnostics():
-                logging.info("    %s", line)
 
 
 def main() -> int:
     setup_logging()
     args = parse_args()
-    # Resolve before importing EasyID (import must not change the process cwd).
     base_output = Path(args.output).expanduser()
     if not base_output.is_absolute():
         base_output = (Path.cwd() / base_output).resolve()

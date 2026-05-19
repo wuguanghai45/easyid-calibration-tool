@@ -1,12 +1,12 @@
-# EasyID Scanner Calibration Tool
+# GVCP Scanner Calibration Tool
 
-工厂标定数据采集工具，通过 EasyID SDK 连接扫码器，自动导出软件/硬件配置、触发一次软触发采图，并将设备信息、解码结果与图像保存到本地目录。
+工厂标定数据采集工具，使用 **GVCP/GVSP/GenICam** 协议栈连接扫码器，导出配置、触发采图，并保存设备信息与结果文件。默认流程不再依赖 EasyID SDK。
 
 ## 功能概述
 
 一次完整采集会依次完成：
 
-1. 通过 **GVCP** 发现设备并连接指定扫码器（序列号或 IP；不依赖 SDK `eidEnumDevices`）
+1. 通过 **GVCP** 发现设备并连接指定扫码器（序列号或 IP）
 2. 保存 `device_info.json`（型号、SN、IP、MAC 等）
 3. 导出 `software_config.xml` 与 `hardware_config.xml`
 4. 软触发采集一帧，保存图像与 `scan_result.json`（解码状态、条码内容、坐标等）
@@ -17,25 +17,10 @@
 
 | 项目 | 说明 |
 |------|------|
-| 操作系统 | **Windows**（推荐）；Linux 需自行配置 `EasyID.py` 中的 `libEasyID.so` 路径 |
+| 操作系统 | Windows / Linux |
 | Python | 3.10+（建议 3.10 或 3.11） |
-| EasyID SDK | 已安装官方 EasyID 运行时，且 `EasyID.dll` 可被加载 |
+| 协议 | GigE Vision（GVCP + GVSP + GenICam） |
 | 网络 | 扫码器与 PC 在同一网段（使用 `--ip` 时） |
-
-### Windows：配置 SDK 环境变量
-
-根据 Python 位数设置其一（路径为 EasyID 安装目录，目录下应包含 `EasyID.dll`）：
-
-- 64 位 Python：`EASYID_RUNENV_64`
-- 32 位 Python：`EASYID_RUNENV_32`
-
-PowerShell 示例：
-
-```powershell
-[System.Environment]::SetEnvironmentVariable("EASYID_RUNENV_64", "C:\Program Files\EasyID", "User")
-```
-
-修改环境变量后需**重新打开**终端再运行脚本。
 
 ## 安装依赖
 
@@ -65,20 +50,19 @@ python read_scanner_calibration.py --ip 192.168.1.100
 
 `--sn` 与 `--ip` 二选一，必填其一。
 
-仅列举当前可发现设备（不采集，使用 **GVCP** 代替 SDK `eidEnumDevices`）：
+仅列举当前可发现设备（不采集）：
 
 ```bash
 python read_scanner_calibration.py --list-devices
 ```
 
-### 设备发现说明
+### 协议说明
 
 | 方式 | 模块 | 说明 |
 |------|------|------|
-| **GVCP（默认）** | `gvcp_discovery.enum_devices()` | UDP/3956 广播，与网卡绑定；双网卡时请用 `--interface` |
-| SDK `eidEnumDevices` | 仅 `--diag` 探测 | 依赖 GigE 过滤驱动；本工具**不**用它做列表/匹配 |
-
-连接时：GVCP 提供 IP/SN/MAC → `eidCreateDevice` → `eidOpenDevice`。若 GVCP 能发现但连接失败，需检查 SDK 驱动与 `EASYID_RUNENV_64`。
+| **GVCP（默认）** | `gvcp_discovery.enum_devices()` | UDP/3956 广播发现设备，双网卡时请用 `--interface` |
+| **GenICam** | `genicam/*` | 解析设备 XML，设置 UserSet / Trigger 等特征 |
+| **GVSP** | `gvsp/*` | 采图流接收，输出 `scan_image.*` 与 `scan_result.json` |
 
 ### 双网卡场景（推荐流程）
 
@@ -102,8 +86,8 @@ python read_scanner_calibration.py --ip 192.168.1.100 --interface "以太网 2"
 | `--interface` | 空 | 按 GVCP 返回的 `interface_name` 过滤网卡（支持子串匹配） |
 | `--output` | `./calibration_out` | 输出根目录；每次运行在其下新建带时间戳的子目录 |
 | `--timeout-ms` | `2000` | 取帧超时（毫秒） |
-| `--buffer-count` | `3` | SDK 采集缓冲区数量 |
-| `--no-clear-buffer` | 关闭 | 采图前不调用 `eidClearFrameBuffer` |
+| `--buffer-count` | `3` | 兼容参数（当前为预留） |
+| `--no-clear-buffer` | 关闭 | 兼容参数（当前为预留） |
 | `--dump-features` | 关闭 | 额外导出 `feature_dump.json` |
 
 示例：指定输出目录并延长超时：
@@ -120,10 +104,10 @@ python read_scanner_calibration.py --sn ABC123456 --dump-features
 
 ### 运行前检查
 
-1. 扫码器已上电，网线/USB 连接正常
-2. 厂商配置工具或本工具能枚举到设备（`eidEnumDevices` 成功）
+1. 扫码器已上电，网线连接正常
+2. `python read_scanner_calibration.py --list-devices` 能发现目标设备
 3. 使用 `--sn` 时 SN 与设备标签一致；使用 `--ip` 时 IP 与扫码器当前地址一致
-4. 标定场景下，建议在扫码器前放置标准标定码，确保 `scan_result.json` 中 `read_state` 为成功状态
+4. 标定场景下，建议在扫码器前放置标准标定码
 
 ## 输出目录结构
 
@@ -180,25 +164,21 @@ flowchart LR
 | 码 | 含义 |
 |----|------|
 | `0` | 采集成功 |
-| `1` | 失败（未找到设备、连接失败、超时、SDK 错误等）；详情见控制台日志 |
+| `1` | 失败（未找到设备、连接失败、超时、协议错误等）；详情见控制台日志 |
 
 ## 常见问题
 
-**提示设置 `EASYID_RUNENV_64`**
-
-未配置或路径错误。确认环境变量指向含 `EasyID.dll` 的目录，并重启终端。
-
 **`No scanner device found`**
 
-PC 未发现设备。检查网线、IP 网段、防火墙，或先用官方工具确认枚举是否正常。
+PC 未发现设备。检查网线、IP 网段、防火墙，或先用 `--diag` 查看本机网卡与发现结果。
 
 **`Device not found for target=...`**
 
 已枚举到设备，但 SN/IP 与参数不一致。核对 `--sn` / `--ip` 是否与 `device_info` 中一致。
 
-**`sdk_enum ... ret=0 num=0` 或 `eidCreateDevice` 失败（GVCP/客户端能看到设备）**
+**连接成功但采图为空**
 
-SDK 在错误网卡上枚举（双网卡常见）。请指定 `--interface` 为相机所在网卡（如 `以太网 2`），确认本机有 `192.168.40.x` 地址，安装 `Drivers` 下 GigE 驱动，并将 `EASYID_RUNENV_64` 设为安装根目录。用 SDK 自带 `Grab.py` 验证；日志中应出现 `gige_host: target=<本机IP>`。
+通常是流端口或触发配置问题。请先指定正确 `--interface`，再增加 `--timeout-ms` 观察。
 
 **`eidGetFrame` 超时**
 
@@ -214,14 +194,12 @@ SDK 在错误网卡上枚举（双网卡常见）。请指定 `--interface` 为�
 easyid-calibration-tool/
 ├── read_scanner_calibration.py   # CLI 入口
 ├── scanner_reader.py             # 连接、导出配置、采图流程
-├── gvcp_discovery.py             # GVCP 设备发现（替代 eidEnumDevices）
-├── gige_host.py                  # 多网卡时绑定本机 GigE IP
+├── gvcp_discovery.py             # GVCP 设备发现
+├── gvcp/                         # GVCP 传输与设备会话
+├── genicam/                      # GenICam XML 引导与特征读写
+├── gvsp/                         # GVSP 采流与 chunk 解析
 ├── scanner_config.py             # 特征名与默认参数
-├── scanner_utils.py              # SDK 封装与图像/JSON 工具
-├── EasyID.py                     # EasyID SDK Python 绑定
+├── scanner_utils.py              # 通用图像/JSON 工具
+├── EasyID.py                     # legacy 参考（默认流程不导入）
 └── requirements.txt
 ```
-
-## 许可证与 SDK
-
-本工具依赖厂商 **EasyID SDK**，使用前请遵守其许可与部署说明。`EasyID.py` 为 SDK 自带或配套的 Python 封装，请勿在未授权环境下分发 `EasyID.dll`。

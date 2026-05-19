@@ -1,18 +1,21 @@
-"""High-level scanner workflow for calibration data collection."""
+"""High-level scanner workflow based on pure GVCP/GVSP protocol."""
 
 from __future__ import annotations
 
 import logging
-from ctypes import POINTER, cast
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import EasyID
-
-from easyid_gvcp_bridge import try_create_device_from_gvcp_info
-from gige_host import configure_gige_discovery_host, resolve_bind_ip, try_easyid_bind_exports
-from gvcp_discovery import enum_devices as gvcp_enum_devices
+from genicam.accessor import GenicamAccessor
+from genicam.bootstrap import fetch_genicam_xml
+from genicam.config_export import export_userset_xml
+from gvcp.device import GvcpDevice
+from gvcp_discovery import _is_discovery_bind_ip, _iter_host_interfaces, enum_devices as gvcp_enum_devices
+from gvsp.chunk_parser import parse_scan_payload
+from gvsp.receiver import GvspReceiver
+from gvsp.setup import configure_stream_channel
 from scanner_config import (
     DEFAULT_BUFFER_COUNT,
     DEFAULT_FRAME_TIMEOUT_MS,
@@ -27,25 +30,10 @@ from scanner_config import (
     USERSET_LOAD_COMMANDS,
     USERSET_SELECTOR_FEATURES,
 )
-from scanner_utils import (
-    ERROR_CODE_NAMES,
-    EasyIDOperationError,
-    check_ret,
-    copy_image_bytes,
-    decode_cstr,
-    ensure_dir,
-    exec_command_feature,
-    list_feature_children,
-    parse_frame_info,
-    save_frame_image,
-    set_enum_feature_symbol,
-    write_json,
-)
+from scanner_utils import ScannerProtocolError, ensure_dir, save_frame_image, write_json
 
 logger = logging.getLogger(__name__)
-MAX_DEVICE_NUM = getattr(EasyID, "MAX_DEVICE_NUM", 256)
 DISCOVERY_GVCP = "gvcp"
-DISCOVERY_SDK = "sdk"
 
 
 @dataclass
@@ -57,21 +45,19 @@ class CaptureOptions:
 
 class ScannerReader:
     def __init__(self) -> None:
-        self.camera = EasyID.Camera()
         self.connected = False
-        self.device_info: EasyID.EidDeviceInfo | None = None
+        self.device_info: dict[str, Any] | None = None
+        self.device: GvcpDevice | None = None
+        self.accessor: GenicamAccessor | None = None
+        self.genicam_xml_text = ""
+        self.bind_ip = ""
 
     def enum_devices(self, interface_name: str | None = None) -> list[dict[str, Any]]:
-        """Discover devices via GVCP (replaces SDK ``eidEnumDevices`` in this tool)."""
         devices = gvcp_enum_devices()
         if interface_name:
             needle = interface_name.casefold()
-            devices = [
-                dev
-                for dev in devices
-                if needle in str(dev.get("interface_name", "")).casefold()
-            ]
-        logger.info("Discovered %d device(s) via GVCP (eidEnumDevices not used).", len(devices))
+            devices = [dev for dev in devices if needle in str(dev.get("interface_name", "")).casefold()]
+        logger.info("Discovered %d device(s) via GVCP.", len(devices))
         return devices
 
     def find_device(
@@ -117,421 +103,145 @@ class ScannerReader:
         ip: str | None = None,
         interface_name: str | None = None,
     ) -> dict[str, Any]:
-        matched = self.find_device(
-            serial_number=serial_number,
-            ip=ip,
-            interface_name=interface_name,
+        matched = self.find_device(serial_number=serial_number, ip=ip, interface_name=interface_name)
+        self.bind_ip = self._resolve_bind_ip(
+            device_ip=str(matched.get("ip_address", "")),
+            interface_name=interface_name or str(matched.get("interface_name", "")),
         )
-        logger.info(
-            "GVCP matched device: ip=%s sn=%s interface=%s",
-            matched.get("ip_address"),
-            matched.get("serial_number"),
-            matched.get("interface_name"),
-        )
+        if not self.bind_ip:
+            raise ScannerProtocolError("Cannot resolve local bind IP. Please specify --interface correctly.")
 
-        self._prepare_gige_host(
-            device_ip=ip or matched.get("ip_address"),
-            interface_name=interface_name or matched.get("interface_name"),
-        )
-
-        # Optional: SDK enum may add device_id; GVCP is sufficient for discovery.
-        sdk_device = self._try_match_sdk_device(
-            gvcp_matched=matched,
-            serial_number=serial_number,
-            ip=ip,
-            interface_name=interface_name,
-        )
-
-        # Refresh SDK device table after host NIC bind (may enable eidEnumDevices).
-        self._probe_sdk_enum_after_bind()
-
-        create_ret = try_create_device_from_gvcp_info(self.camera, matched)
-        if create_ret == EasyID.EidError.eidErrorOK:
-            logger.info("eidCreateDevice succeeded via EidDeviceInfo (GVCP bridge).")
-            last_ret = EasyID.EidError.eidErrorOK
-        else:
-            create_attempts = self._build_create_device_attempts(
-                gvcp_matched=matched,
-                sdk_device=sdk_device,
-                serial_number=serial_number,
-                ip=ip,
-            )
-            last_ret = EasyID.EidError.eidErrorInvalidParameter
-            for create_data, create_type in create_attempts:
-                type_name = self._device_data_type_name(create_type)
-                logger.info("eidCreateDevice: data=%r type=%s", create_data, type_name)
-                last_ret = self.camera.eidCreateDevice(create_data, create_type)
-                if last_ret == EasyID.EidError.eidErrorOK:
-                    break
-
-        if last_ret != EasyID.EidError.eidErrorOK:
-            raise EasyIDOperationError(
-                "eidCreateDevice failed after GVCP discovery: "
-                f"{ERROR_CODE_NAMES.get(last_ret, 'unknown')} ({last_ret}). "
-                "Device was found by GVCP but SDK could not open it. "
-                "Check GigE driver (Drivers folder), EASYID_RUNENV_64, and try --sn."
-            )
-
-        check_ret(self.camera.eidOpenDevice(), "eidOpenDevice")
+        self.device = GvcpDevice(device_ip=str(matched["ip_address"]), bind_ip=self.bind_ip)
+        bootstrap = fetch_genicam_xml(self.device)
+        self.genicam_xml_text = bootstrap.xml_text
+        self.accessor = GenicamAccessor(self.device, self.genicam_xml_text)
         self.connected = True
-
-        info = EasyID.EidDeviceInfo()
-        check_ret(self.camera.eidGetDeviceInfo(info), "eidGetDeviceInfo")
-        self.device_info = info
-        return self.device_info_to_dict(info)
-
-    def _probe_sdk_enum_after_bind(self) -> None:
-        try:
-            devices = self.enum_sdk_devices()
-        except Exception as exc:
-            logger.debug("SDK enum after NIC bind failed: %s", exc)
-            return
-        if devices:
-            logger.info(
-                "SDK eidEnumDevices found %d device(s) after GigE host bind.", len(devices)
-            )
-        else:
-            logger.debug("SDK eidEnumDevices still empty after GigE host bind.")
-
-    def _prepare_gige_host(
-        self,
-        *,
-        device_ip: str | None,
-        interface_name: str | None,
-    ) -> None:
-        bind_ip = resolve_bind_ip(device_ip=device_ip, interface_name=interface_name)
-        if not bind_ip:
-            logger.warning(
-                "Could not resolve host bind IP for interface=%r; "
-                "eidCreateDevice may fail on multi-homed PCs.",
-                interface_name,
-            )
-            return
-        sdk_root = getattr(EasyID, "EASYID_SDK_ROOT", None)
-        for line in configure_gige_discovery_host(bind_ip, sdk_root):
-            logger.debug("%s", line)
-        for line in try_easyid_bind_exports(EasyID.EASYID, bind_ip):
-            logger.debug("%s", line)
-
-    def _try_match_sdk_device(
-        self,
-        *,
-        gvcp_matched: dict[str, Any],
-        serial_number: str | None,
-        ip: str | None,
-        interface_name: str | None,
-    ) -> dict[str, Any] | None:
-        try:
-            sdk_devices = self.enum_sdk_devices()
-        except Exception as exc:
-            logger.debug("SDK eidEnumDevices skipped: %s", exc)
-            return None
-        if not sdk_devices:
-            logger.debug("SDK eidEnumDevices returned 0 devices (GVCP discovery used instead).")
-            return None
-        logger.info("SDK eidEnumDevices returned %d device(s) (optional enrichment).", len(sdk_devices))
-        return self._match_sdk_device(
-            sdk_devices,
-            gvcp_matched=gvcp_matched,
-            serial_number=serial_number,
-            ip=ip,
-            interface_name=interface_name,
-        )
+        self.device_info = dict(matched)
+        self.device_info["genicam_xml_url"] = bootstrap.url
+        return self.device_info
 
     def disconnect(self) -> None:
-        if not self.connected:
-            return
-        try:
-            self.camera.eidStopGrabbing()
-        except Exception:
-            pass
-        try:
-            self.camera.eidCloseDevice()
-        except Exception:
-            pass
-        try:
-            self.camera.eidReleaseHandle()
-        except Exception:
-            pass
+        if self.device is not None:
+            self.device.close()
+        self.device = None
+        self.accessor = None
         self.connected = False
 
     def dump_feature_candidates(self, output_dir: Path) -> dict[str, list[str]]:
+        self._ensure_connected()
         ensure_dir(output_dir)
         feature_map: dict[str, list[str]] = {}
+        assert self.accessor is not None
         for root_name in FEATURE_ROOT_NAMES:
-            try:
-                feature_map[root_name] = list_feature_children(self.camera, root_name)
-            except Exception:
-                continue
+            feature_map[root_name] = self.accessor.list_feature_children(root_name)
         write_json(output_dir / "feature_dump.json", feature_map)
         return feature_map
 
     def export_configs(self, output_dir: Path) -> dict[str, str]:
+        self._ensure_connected()
         ensure_dir(output_dir)
         outputs: dict[str, str] = {}
-
         software_path = output_dir / "software_config.xml"
         hardware_path = output_dir / "hardware_config.xml"
 
-        self._select_userset(SOFTWARE_USERSET_SYMBOLS)
-        check_ret(self.camera.eidSaveDeviceConfig(str(software_path)), "eidSaveDeviceConfig(software)")
+        software_symbol = self._select_userset(SOFTWARE_USERSET_SYMBOLS)
+        export_userset_xml(self.genicam_xml_text, software_symbol, software_path)
         outputs["software_config"] = str(software_path)
 
-        self._select_userset(HARDWARE_USERSET_SYMBOLS)
-        check_ret(self.camera.eidSaveDeviceConfig(str(hardware_path)), "eidSaveDeviceConfig(hardware)")
+        hardware_symbol = self._select_userset(HARDWARE_USERSET_SYMBOLS)
+        export_userset_xml(self.genicam_xml_text, hardware_symbol, hardware_path)
         outputs["hardware_config"] = str(hardware_path)
         return outputs
 
     def capture_scan(self, output_dir: Path, options: CaptureOptions) -> dict[str, Any]:
+        self._ensure_connected()
         ensure_dir(output_dir)
-        check_ret(self.camera.eidStartGrabbing(options.buffer_count), "eidStartGrabbing")
-        frame_acquired = False
-        try:
-            if options.clear_buffer:
-                self.camera.eidClearFrameBuffer()
+        assert self.device is not None
+        assert self.accessor is not None
+        if not self.bind_ip:
+            raise ScannerProtocolError("Missing bind IP, connect first.")
 
+        timeout_s = max(options.timeout_ms / 1000.0, 0.2)
+        receiver = GvspReceiver(self.bind_ip, timeout_s=timeout_s)
+        try:
+            configure_stream_channel(self.device, self.bind_ip, receiver.port)
             self._prepare_soft_trigger()
             self._trigger_once()
-
-            check_ret(self.camera.eidGetFrame(options.timeout_ms), "eidGetFrame")
-            frame_acquired = True
-            frame_info = EasyID.EidFrameInfo()
-            check_ret(self.camera.eidGetFrameInfo(frame_info), "eidGetFrameInfo")
-
-            image_bytes = copy_image_bytes(frame_info)
-            image_path = save_frame_image(output_dir / "scan_image", frame_info, image_bytes)
-
-            payload = parse_frame_info(frame_info)
-            payload["image_path"] = str(image_path)
-            write_json(output_dir / "scan_result.json", payload)
-            return payload
+            frame = receiver.capture_frame(timeout_s)
         finally:
-            if frame_acquired:
-                try:
-                    self.camera.eidReleaseFrame()
-                except Exception:
-                    pass
-            try:
-                self.camera.eidStopGrabbing()
-            except Exception:
-                pass
+            receiver.close()
 
-    def enum_sdk_devices(self) -> list[dict[str, Any]]:
-        """Optional SDK transport enumeration (often returns empty; use ``enum_devices`` instead)."""
-        EasyID.initialize_runtime()
-        devices, _logs = self._enum_sdk_devices_internal(log_each_attempt=False)
-        for dev in devices:
-            dev["discovery"] = DISCOVERY_SDK
-        return devices
+        image_path = save_frame_image(
+            output_dir / "scan_image",
+            frame.image_bytes,
+            is_jpeg=frame.is_jpeg,
+            width=frame.width,
+            height=frame.height,
+        )
+        chunk_payload = parse_scan_payload(frame.image_bytes)
+        payload: dict[str, Any] = {
+            "frame_id": 0,
+            "timestamp": int(time.time() * 1_000_000_000),
+            "width": frame.width,
+            "height": frame.height,
+            "pixel_format": 0,
+            "image_data_len": len(frame.image_bytes),
+            "is_jpeg": frame.is_jpeg,
+            **chunk_payload,
+            "image_path": str(image_path),
+        }
+        write_json(output_dir / "scan_result.json", payload)
+        return payload
 
     def enum_sdk_devices_diagnostics(self) -> list[str]:
-        EasyID.initialize_runtime()
-        _devices, logs = self._enum_sdk_devices_internal(log_each_attempt=True)
-        return logs
+        # Pure GVCP mode: SDK enumeration removed.
+        return []
 
-    def _enum_sdk_devices_internal(self, *, log_each_attempt: bool) -> tuple[list[dict[str, Any]], list[str]]:
-        devices: list[dict[str, Any]] = []
-        logs: list[str] = []
-        seen: set[str] = set()
-        interface_types = (
-            EasyID.EidInterfaceType.eidInterfaceTypeGige,
-            0,
-            EasyID.EidInterfaceType.eidInterfaceTypeAll,
-        )
-        layouts: tuple[tuple[str, type], ...] = (
-            ("pointer+prealloc", EasyID.EidDeviceList),
-            ("pointer", EasyID.EidDeviceList),
-            ("inline", EasyID.EidDeviceListInline),
-        )
-
-        for layout_name, list_type in layouts:
-            for interface_type in interface_types:
-                for preallocate in (True, False) if layout_name != "inline" else (False,):
-                    device_list = list_type()
-                    backing = None
-                    if layout_name == "pointer+prealloc":
-                        backing = (EasyID.EidDeviceInfo * MAX_DEVICE_NUM)()
-                        device_list.infos = cast(backing, POINTER(EasyID.EidDeviceInfo))
-
-                    ret = EasyID.Camera.eidEnumDevices(device_list, interface_type)
-                    count = min(int(device_list.num), MAX_DEVICE_NUM)
-                    log_line = (
-                        f"sdk_enum layout={layout_name} iface=0x{interface_type & 0xFFFFFFFF:08X} "
-                        f"prealloc={preallocate} ret={ret} num={count}"
-                    )
-                    logs.append(log_line)
-                    if log_each_attempt:
-                        logger.info(log_line)
-
-                    if ret != EasyID.EidError.eidErrorOK or count == 0:
-                        continue
-
-                    for idx in range(count):
-                        if layout_name == "inline":
-                            info = device_list.infos[idx]
-                        elif backing is not None:
-                            info = backing[idx]
-                        elif device_list.infos:
-                            info = device_list.infos[idx]
-                        else:
-                            break
-                        dev = self.device_info_to_dict(info)
-                        key = dev.get("serial_number") or dev.get("ip_address") or dev.get("device_id")
-                        if not key or key in seen:
-                            continue
-                        seen.add(key)
-                        devices.append(dev)
-                    if devices:
-                        return devices, logs
-        return devices, logs
-
-    @staticmethod
-    def _normalize_mac(mac: str) -> str:
-        return "".join(ch for ch in mac if ch.isalnum()).lower()
-
-    def _match_sdk_device(
-        self,
-        sdk_devices: list[dict[str, Any]],
-        *,
-        gvcp_matched: dict[str, Any],
-        serial_number: str | None,
-        ip: str | None,
-        interface_name: str | None,
-    ) -> dict[str, Any] | None:
-        if not sdk_devices:
-            return None
-
-        target_sn = serial_number or gvcp_matched.get("serial_number") or ""
-        target_ip = ip or gvcp_matched.get("ip_address") or ""
-        target_mac = gvcp_matched.get("mac_address") or ""
-        normalized_mac = self._normalize_mac(target_mac)
-
-        matched_devices: list[dict[str, Any]] = []
-        for dev in sdk_devices:
-            if target_sn and dev.get("serial_number") == target_sn:
-                matched_devices.append(dev)
-            elif target_ip and dev.get("ip_address") == target_ip:
-                matched_devices.append(dev)
-            elif normalized_mac and self._normalize_mac(dev.get("mac_address", "")) == normalized_mac:
-                matched_devices.append(dev)
-
-        if interface_name:
-            needle = interface_name.casefold()
-            matched_devices = [
-                dev
-                for dev in matched_devices
-                if needle in str(dev.get("interface_name", "")).casefold()
-            ]
-
-        if not matched_devices:
-            return None
-        return matched_devices[0]
-
-    @classmethod
-    def _build_create_device_attempts(
-        cls,
-        *,
-        gvcp_matched: dict[str, Any],
-        sdk_device: dict[str, Any] | None,
-        serial_number: str | None,
-        ip: str | None,
-    ) -> list[tuple[str, int]]:
-        """Build eidCreateDevice attempts from GVCP discovery (primary) and optional SDK enum."""
-        attempts: list[tuple[str, int]] = []
-        seen: set[tuple[str, int]] = set()
-
-        def add(value: str | None, data_type: int) -> None:
-            normalized = (value or "").strip()
-            if not normalized:
-                return
-            key = (normalized, data_type)
-            if key in seen:
-                return
-            seen.add(key)
-            attempts.append(key)
-
-        def add_mac(value: str | None) -> None:
-            normalized = (value or "").strip()
-            if not normalized:
-                return
-            add(normalized, EasyID.EidDeviceDataType.eidDeviceDataTypeMAC)
-            add(normalized.replace(":", ""), EasyID.EidDeviceDataType.eidDeviceDataTypeMAC)
-            add(normalized.replace(":", "").upper(), EasyID.EidDeviceDataType.eidDeviceDataTypeMAC)
-
-        # GVCP discovery (replaces eidEnumDevices for device identification).
-        add(gvcp_matched.get("serial_number"), EasyID.EidDeviceDataType.eidDeviceDataTypeSN)
-        add(gvcp_matched.get("ip_address"), EasyID.EidDeviceDataType.eidDeviceDataTypeIP)
-        add_mac(gvcp_matched.get("mac_address"))
-
-        if serial_number:
-            add(serial_number, EasyID.EidDeviceDataType.eidDeviceDataTypeSN)
-        if ip:
-            add(ip, EasyID.EidDeviceDataType.eidDeviceDataTypeIP)
-
-        if sdk_device:
-            add(sdk_device.get("serial_number"), EasyID.EidDeviceDataType.eidDeviceDataTypeSN)
-            add(sdk_device.get("device_id"), EasyID.EidDeviceDataType.eidDeviceDataTypeID)
-            add(sdk_device.get("ip_address"), EasyID.EidDeviceDataType.eidDeviceDataTypeIP)
-            add_mac(sdk_device.get("mac_address"))
-
-        if not attempts:
-            raise RuntimeError("Matched device has no usable identifier (sn/ip/mac).")
-        return attempts
-
-    @staticmethod
-    def _device_data_type_name(data_type: int) -> str:
-        mapping = {
-            EasyID.EidDeviceDataType.eidDeviceDataTypeID: "ID",
-            EasyID.EidDeviceDataType.eidDeviceDataTypeSN: "SN",
-            EasyID.EidDeviceDataType.eidDeviceDataTypeIP: "IP",
-            EasyID.EidDeviceDataType.eidDeviceDataTypeMAC: "MAC",
-        }
-        return mapping.get(data_type, str(data_type))
-
-    @staticmethod
-    def device_info_to_dict(info: EasyID.EidDeviceInfo) -> dict[str, Any]:
-        return {
-            "device_id": decode_cstr(info.deviceID),
-            "camera_name": decode_cstr(info.cameraName),
-            "serial_number": decode_cstr(info.serialNumber),
-            "vendor_name": decode_cstr(info.vendorName),
-            "model_name": decode_cstr(info.modelName),
-            "manufacture_info": decode_cstr(info.manufactureInfo),
-            "device_version": decode_cstr(info.deviceVersion),
-            "interface_name": decode_cstr(info.interfaceName),
-            "device_type": int(info.deviceType),
-            "interface_type": int(info.interfaceType),
-            "ip_address": decode_cstr(info.gigeDeviceInfo.ipAddress),
-            "subnet_mask": decode_cstr(info.gigeDeviceInfo.subnetMask),
-            "gateway": decode_cstr(info.gigeDeviceInfo.defaultGateWay),
-            "mac_address": decode_cstr(info.gigeDeviceInfo.macAddress),
-            "discovery": DISCOVERY_SDK,
-        }
-
-    def _select_userset(self, symbols: tuple[str, ...]) -> None:
-        set_enum_feature_symbol(
-            self.camera,
-            USERSET_SELECTOR_FEATURES,
-            symbols,
-        )
-        try:
-            exec_command_feature(self.camera, USERSET_LOAD_COMMANDS)
-        except Exception:
-            pass
+    def _select_userset(self, symbols: tuple[str, ...]) -> str:
+        self._ensure_connected()
+        assert self.accessor is not None
+        for feature in USERSET_SELECTOR_FEATURES:
+            for symbol in symbols:
+                if self.accessor.set_enum_symbol(feature, symbol):
+                    for command in USERSET_LOAD_COMMANDS:
+                        self.accessor.exec_command(command)
+                    return symbol
+        return symbols[0]
 
     def _prepare_soft_trigger(self) -> None:
-        try:
-            set_enum_feature_symbol(self.camera, TRIGGER_MODE_FEATURES, TRIGGER_MODE_ON_SYMBOLS)
-        except Exception:
-            pass
-        try:
-            set_enum_feature_symbol(
-                self.camera,
-                TRIGGER_SOURCE_FEATURES,
-                TRIGGER_SOURCE_SOFTWARE_SYMBOLS,
-            )
-        except Exception:
-            pass
+        self._ensure_connected()
+        assert self.accessor is not None
+        for feature in TRIGGER_MODE_FEATURES:
+            for symbol in TRIGGER_MODE_ON_SYMBOLS:
+                if self.accessor.set_enum_symbol(feature, symbol):
+                    break
+        for feature in TRIGGER_SOURCE_FEATURES:
+            for symbol in TRIGGER_SOURCE_SOFTWARE_SYMBOLS:
+                if self.accessor.set_enum_symbol(feature, symbol):
+                    break
 
-    def _trigger_once(self) -> None:
-        exec_command_feature(self.camera, TRIGGER_COMMAND_FEATURES)
+    def _trigger_once(self) -> str:
+        self._ensure_connected()
+        assert self.accessor is not None
+        for command in TRIGGER_COMMAND_FEATURES:
+            if self.accessor.exec_command(command):
+                return command
+        raise ScannerProtocolError(f"Unable to trigger commands from candidates={TRIGGER_COMMAND_FEATURES}")
+
+    def _ensure_connected(self) -> None:
+        if not self.connected or self.device is None or self.accessor is None:
+            raise ScannerProtocolError("Device is not connected.")
+
+    def _resolve_bind_ip(self, *, device_ip: str, interface_name: str | None) -> str:
+        interfaces = [item for item in _iter_host_interfaces() if _is_discovery_bind_ip(item.ip)]
+        if interface_name:
+            needle = interface_name.casefold()
+            for item in interfaces:
+                if needle in item.name.casefold():
+                    return item.ip
+        for item in interfaces:
+            if device_ip and item.ip.split(".")[:3] == device_ip.split(".")[:3]:
+                return item.ip
+        if interfaces:
+            return interfaces[0].ip
+        return ""
