@@ -82,7 +82,8 @@ def parse_discovery_ack(packet: bytes) -> dict[str, Any] | None:
         user_name_raw,
     ) = struct.unpack_from("!II8sII16s16s16s32s32s32s48s16s16s", payload, 0)
 
-    mac_address = _format_mac(mac_field[:6])
+    # GigE Vision DISCOVERY_ACK: 6-byte MAC starts at byte 2 of the 8-byte field.
+    mac_address = _format_mac(mac_field[2:8] if len(mac_field) >= 8 else mac_field[:6])
     return {
         "mac_address": mac_address,
         "ip_address": _decode_padded_ip(current_ip_raw),

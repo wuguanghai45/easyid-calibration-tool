@@ -187,6 +187,10 @@ PC 未发现设备。检查网线、IP 网段、防火墙，或先用官方工�
 
 已枚举到设备，但 SN/IP 与参数不一致。核对 `--sn` / `--ip` 是否与 `device_info` 中一致。
 
+**`sdk_enum ... ret=0 num=0` 或 `eidCreateDevice` 失败（GVCP/客户端能看到设备）**
+
+SDK 在错误网卡上枚举（双网卡常见）。请指定 `--interface` 为相机所在网卡（如 `以太网 2`），确认本机有 `192.168.40.x` 地址，安装 `Drivers` 下 GigE 驱动，并将 `EASYID_RUNENV_64` 设为安装根目录。用 SDK 自带 `Grab.py` 验证；日志中应出现 `gige_host: target=<本机IP>`。
+
 **`eidGetFrame` 超时**
 
 增大 `--timeout-ms`；确认触发模式与标定码在视野内；可尝试 `--no-clear-buffer` 对比行为。

@@ -148,6 +148,11 @@ if os_name == 'Windows':
     EASYID_RUNTIME_DIR = runtime_dir
     EASYID = WinDLL(str(lib_path))
     initialize_runtime()
+    # Some transport layers read camera discovery config from Runtime directory.
+    try:
+        os.chdir(runtime_dir)
+    except OSError:
+        pass
 elif os_name == 'Linux':
         EASYID = CDLL("../../../lib/libEasyID.so")
 else:

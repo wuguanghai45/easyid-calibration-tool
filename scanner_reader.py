@@ -27,6 +27,7 @@ from scanner_config import (
     USERSET_LOAD_COMMANDS,
     USERSET_SELECTOR_FEATURES,
 )
+from gige_host import configure_gige_discovery_host, resolve_bind_ip, try_easyid_bind_exports
 from gvcp_discovery import discover_gige_devices
 from scanner_utils import (
     ERROR_CODE_NAMES,
@@ -114,6 +115,23 @@ class ScannerReader:
             ip=ip,
             interface_name=interface_name,
         )
+        bind_ip = resolve_bind_ip(
+            device_ip=ip or matched.get("ip_address"),
+            interface_name=interface_name or matched.get("interface_name"),
+        )
+        if bind_ip:
+            sdk_root = getattr(EasyID, "EASYID_SDK_ROOT", None)
+            for line in configure_gige_discovery_host(bind_ip, sdk_root):
+                logger.info("%s", line)
+            for line in try_easyid_bind_exports(EasyID.EASYID, bind_ip):
+                logger.info("%s", line)
+        else:
+            logger.warning(
+                "Could not resolve host bind IP for interface=%r; "
+                "GigE SDK may enumerate on the wrong NIC.",
+                interface_name or matched.get("interface_name"),
+            )
+
         # SDK must enumerate devices before eidCreateDevice on many runtime builds.
         sdk_devices = self.enum_sdk_devices()
         sdk_device = self._match_sdk_device(
