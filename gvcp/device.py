@@ -48,7 +48,9 @@ class GvcpDevice:
         remaining = size
         offset = 0
         while remaining > 0:
-            current = min(remaining, chunk_size)
+            # Some devices only accept aligned READMEM sizes (e.g. 0x200).
+            # Keep requesting fixed chunk size and trim tail after concatenation.
+            current = chunk_size
             try:
                 part = self.read_memory(address + offset, current)
             except Exception:
