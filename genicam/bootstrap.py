@@ -43,11 +43,7 @@ def _fetch_single_url(device: GvcpDevice, url: str) -> str:
         filename, addr_hex, size_hex = local_match.groups()
         address = _parse_hex_or_prefixed_int(addr_hex)
         size = _parse_hex_or_prefixed_int(size_hex)
-        payload = device.read_memory_chunked(address, size, chunk_size=0x200)
-        if len(payload) < min(size, 2048):
-            alt = device.read_memory_fixed_base(address, size, chunk_size=0x200)
-            if len(alt) > len(payload):
-                payload = alt
+        payload = _read_local_resource(device, address, size)
         if filename.lower().endswith(".zip") or b"PK\x03\x04" in payload[:32]:
             try:
                 return _decode_xml_from_zip(payload)
@@ -86,6 +82,44 @@ def _parse_hex_or_prefixed_int(value: str) -> int:
         return int(text, 16)
     # GenICam local URL commonly uses raw hex without 0x.
     return int(text, 16)
+
+
+def _read_local_resource(device: GvcpDevice, address: int, size: int) -> bytes:
+    # Strategy 1: repeat the same READMEM request, some devices stream chunks this way.
+    stream = _read_local_stream(device, address, size)
+    best = stream
+
+    # Strategy 2: address-increment chunk reads.
+    chunked = device.read_memory_chunked(address, size, chunk_size=0x200)
+    if len(chunked) > len(best):
+        best = chunked
+
+    # Strategy 3: fixed-base small chunk polling.
+    fixed = device.read_memory_fixed_base(address, size, chunk_size=0x200)
+    if len(fixed) > len(best):
+        best = fixed
+    return best
+
+
+def _read_local_stream(device: GvcpDevice, address: int, size: int) -> bytes:
+    chunks: list[bytes] = []
+    last: bytes | None = None
+    total = 0
+    for _ in range(256):
+        if total >= size:
+            break
+        try:
+            part = device.read_memory(address, size)
+        except Exception:
+            break
+        if not part:
+            break
+        if last is not None and part == last:
+            break
+        chunks.append(part)
+        last = part
+        total += len(part)
+    return b"".join(chunks)[:size]
 
 
 def _decode_xml_text(payload: bytes) -> str:
