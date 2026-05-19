@@ -15,6 +15,7 @@ REG_GEV_SCPD = 0x0D08
 REG_GEV_SCDA0 = 0x0D18
 REG_GEV_SCDA1 = 0x0D1C
 REG_GEV_SCP_HOST_PORT = 0x0D00
+XML_URL_BLOCK_SIZE = 512
 
 
 @dataclass
@@ -44,15 +45,35 @@ class GvcpDevice:
     def read_xml_url_candidates(self) -> list[str]:
         urls: list[str] = []
         for register in (REG_GEV_XML_URL_0, REG_GEV_XML_URL_1):
-            raw_value = self.read_register(register)
-            if raw_value <= 0:
-                continue
-            # Some devices store direct memory pointer in URL register.
-            data = self.read_memory(raw_value, 512)
+            # GigE Vision bootstrap usually stores URL text directly in register blocks.
+            data = self._read_register_block(register, XML_URL_BLOCK_SIZE)
             text = data.split(b"\x00", 1)[0].decode("ascii", errors="ignore").strip()
             if text:
                 urls.append(text)
+                continue
+
+            # Fallback: some vendor devices expose a pointer in the first register.
+            raw_value = int.from_bytes(data[:4], byteorder="big", signed=False)
+            if raw_value <= 0:
+                continue
+            try:
+                mem_data = self.read_memory(raw_value, XML_URL_BLOCK_SIZE)
+            except Exception:
+                continue
+            mem_text = mem_data.split(b"\x00", 1)[0].decode("ascii", errors="ignore").strip()
+            if mem_text:
+                urls.append(mem_text)
         return urls
+
+    def _read_register_block(self, start_address: int, size: int) -> bytes:
+        if size <= 0:
+            return b""
+        chunks: list[bytes] = []
+        words = (size + 3) // 4
+        for index in range(words):
+            value = self.read_register(start_address + index * 4)
+            chunks.append(int(value & 0xFFFFFFFF).to_bytes(4, byteorder="big", signed=False))
+        return b"".join(chunks)[:size]
 
     def configure_stream_destination(self, host_ip_u32: int, host_port: int, packet_size: int = 1400, scpd: int = 0) -> None:
         # These registers are common across GigE Vision devices.
