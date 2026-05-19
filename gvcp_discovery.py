@@ -1,0 +1,296 @@
+"""GigE Vision GVCP discovery (UDP/3956) for enumerating GigE devices."""
+
+from __future__ import annotations
+
+import ipaddress
+import re
+import socket
+import struct
+import subprocess
+import sys
+from dataclasses import dataclass
+from typing import Any
+
+GVCP_PORT = 3956
+GVCP_MSG_KEY_CODE = 0x42
+GVCP_FLAG_ACK_REQUIRED = 0x11
+GVCP_DISCOVERY_CMD = 0x0002
+GVCP_DISCOVERY_ACK = 0x0003
+DISCOVERY_ACK_PAYLOAD_SIZE = 248
+DEFAULT_DISCOVERY_TIMEOUT_S = 1.0
+
+
+@dataclass(frozen=True)
+class HostInterface:
+    name: str
+    ip: str
+    broadcast: str
+
+
+def build_discovery_command(request_id: int = 1) -> bytes:
+    return struct.pack(
+        "!BBHHH",
+        GVCP_MSG_KEY_CODE,
+        GVCP_FLAG_ACK_REQUIRED,
+        GVCP_DISCOVERY_CMD,
+        0,
+        request_id & 0xFFFF,
+    )
+
+
+def _decode_padded_ip(raw: bytes) -> str:
+    if len(raw) < 4:
+        return ""
+    return socket.inet_ntoa(raw[-4:])
+
+
+def _decode_cstr(raw: bytes) -> str:
+    return raw.split(b"\x00", 1)[0].decode("ascii", errors="replace").strip()
+
+
+def _format_mac(mac_bytes: bytes) -> str:
+    return ":".join(f"{byte:02x}" for byte in mac_bytes)
+
+
+def parse_discovery_ack(packet: bytes) -> dict[str, Any] | None:
+    if len(packet) < 8:
+        return None
+
+    status, ack, _length, _req_id = struct.unpack_from("!HHHH", packet, 0)
+    if status != 0 or ack != GVCP_DISCOVERY_ACK:
+        return None
+
+    payload = packet[8:]
+    if len(payload) < DISCOVERY_ACK_PAYLOAD_SIZE:
+        return None
+
+    (
+        _spec_version,
+        _device_mode,
+        mac_field,
+        _supported_ip_config,
+        _current_ip_config,
+        current_ip_raw,
+        subnet_raw,
+        gateway_raw,
+        manufacturer_raw,
+        model_raw,
+        version_raw,
+        manufacture_info_raw,
+        serial_raw,
+        user_name_raw,
+    ) = struct.unpack_from("!II8sII16s16s16s32s32s32s48s16s16s", payload, 0)
+
+    mac_address = _format_mac(mac_field[:6])
+    return {
+        "mac_address": mac_address,
+        "ip_address": _decode_padded_ip(current_ip_raw),
+        "subnet_mask": _decode_padded_ip(subnet_raw),
+        "gateway": _decode_padded_ip(gateway_raw),
+        "vendor_name": _decode_cstr(manufacturer_raw),
+        "model_name": _decode_cstr(model_raw),
+        "device_version": _decode_cstr(version_raw),
+        "manufacture_info": _decode_cstr(manufacture_info_raw),
+        "serial_number": _decode_cstr(serial_raw),
+        "camera_name": _decode_cstr(user_name_raw),
+    }
+
+
+def _broadcast_from_ip_mask(ip: str, mask: str) -> str | None:
+    try:
+        interface = ipaddress.IPv4Interface(f"{ip}/{mask}")
+    except ValueError:
+        return None
+    return str(interface.network.broadcast_address)
+
+
+def _iter_host_interfaces() -> list[HostInterface]:
+    if sys.platform == "win32":
+        return _iter_host_interfaces_windows()
+    return _iter_host_interfaces_unix()
+
+
+def _iter_host_interfaces_unix() -> list[HostInterface]:
+    try:
+        proc = subprocess.run(
+            ["ip", "-4", "-o", "addr", "show"],
+            capture_output=True,
+            text=True,
+            timeout=3,
+            check=False,
+        )
+    except Exception:
+        return []
+
+    if proc.returncode != 0:
+        return []
+
+    interfaces: list[HostInterface] = []
+    for line in proc.stdout.splitlines():
+        match = re.search(
+            r"^\d+:\s+(\S+)\s+inet\s+(\d+\.\d+\.\d+\.\d+)/(\d+)\s",
+            line,
+        )
+        if not match:
+            continue
+        name, ip, prefix = match.groups()
+        if ip.startswith("127."):
+            continue
+        try:
+            network = ipaddress.IPv4Network(f"{ip}/{prefix}", strict=False)
+        except ValueError:
+            continue
+        interfaces.append(
+            HostInterface(
+                name=name,
+                ip=ip,
+                broadcast=str(network.broadcast_address),
+            )
+        )
+    return interfaces
+
+
+def _iter_host_interfaces_windows() -> list[HostInterface]:
+    try:
+        proc = subprocess.run(
+            ["ipconfig"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+        )
+    except Exception:
+        return []
+
+    if proc.returncode != 0:
+        return []
+
+    interfaces: list[HostInterface] = []
+    current_name = ""
+    current_ip = ""
+    current_mask = ""
+
+    adapter_re = re.compile(r"^(?:以太网适配器|无线局域网适配器|Wireless LAN adapter|Ethernet adapter)\s*(.+):\s*$")
+    ipv4_re = re.compile(
+        r"^\s*(?:IPv4 地址|IPv4 Address)[^:]*:\s*(\d+\.\d+\.\d+\.\d+)\s*$",
+        re.IGNORECASE,
+    )
+    mask_re = re.compile(
+        r"^\s*(?:子网掩码|Subnet Mask)[^:]*:\s*(\d+\.\d+\.\d+\.\d+)\s*$",
+        re.IGNORECASE,
+    )
+
+    def flush() -> None:
+        nonlocal current_name, current_ip, current_mask
+        if not current_name or not current_ip or current_ip.startswith("127."):
+            current_ip = ""
+            current_mask = ""
+            return
+        broadcast = _broadcast_from_ip_mask(current_ip, current_mask or "255.255.255.0")
+        if broadcast:
+            interfaces.append(
+                HostInterface(
+                    name=current_name.strip(),
+                    ip=current_ip,
+                    broadcast=broadcast,
+                )
+            )
+        current_ip = ""
+        current_mask = ""
+
+    for line in proc.stdout.splitlines():
+        adapter_match = adapter_re.match(line)
+        if adapter_match:
+            flush()
+            current_name = adapter_match.group(1)
+            continue
+        ip_match = ipv4_re.match(line)
+        if ip_match:
+            current_ip = ip_match.group(1)
+            continue
+        mask_match = mask_re.match(line)
+        if mask_match:
+            current_mask = mask_match.group(1)
+
+    flush()
+    return interfaces
+
+
+def _discovery_targets() -> list[tuple[str | None, str, str]]:
+    """Return (bind_ip, destination_ip, interface_name) tuples."""
+    targets: list[tuple[str | None, str, str]] = []
+    seen: set[tuple[str | None, str]] = set()
+
+    for host_if in _iter_host_interfaces():
+        key = (host_if.ip, host_if.broadcast)
+        if key in seen:
+            continue
+        seen.add(key)
+        targets.append((host_if.ip, host_if.broadcast, host_if.name))
+
+    if not any(dest == "255.255.255.255" for _, dest, _ in targets):
+        targets.append((None, "255.255.255.255", ""))
+    return targets
+
+
+def discover_gige_devices(timeout_s: float = DEFAULT_DISCOVERY_TIMEOUT_S) -> list[dict[str, Any]]:
+    packet = build_discovery_command()
+    devices_by_mac: dict[str, dict[str, Any]] = {}
+    per_socket_timeout = max(timeout_s / max(len(_discovery_targets()), 1), 0.2)
+
+    for bind_ip, destination, interface_name in _discovery_targets():
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+            if bind_ip:
+                sock.bind((bind_ip, 0))
+            else:
+                sock.bind(("", 0))
+            sock.settimeout(per_socket_timeout)
+            sock.sendto(packet, (destination, GVCP_PORT))
+
+            while True:
+                try:
+                    data, _addr = sock.recvfrom(4096)
+                except socket.timeout:
+                    break
+                parsed = parse_discovery_ack(data)
+                if not parsed:
+                    continue
+                mac = parsed["mac_address"]
+                if mac in devices_by_mac:
+                    continue
+                devices_by_mac[mac] = _gvcp_device_to_dict(parsed, interface_name)
+        finally:
+            sock.close()
+
+    return sorted(
+        devices_by_mac.values(),
+        key=lambda item: (item.get("interface_name", ""), item.get("ip_address", "")),
+    )
+
+
+def _gvcp_device_to_dict(parsed: dict[str, Any], interface_name: str) -> dict[str, Any]:
+    serial_number = parsed.get("serial_number", "")
+    ip_address = parsed.get("ip_address", "")
+    mac_address = parsed.get("mac_address", "")
+    return {
+        "device_id": "",
+        "camera_name": parsed.get("camera_name", ""),
+        "serial_number": serial_number,
+        "vendor_name": parsed.get("vendor_name", ""),
+        "model_name": parsed.get("model_name", ""),
+        "manufacture_info": parsed.get("manufacture_info", ""),
+        "device_version": parsed.get("device_version", ""),
+        "interface_name": interface_name,
+        "device_type": 1,
+        "interface_type": 1,
+        "ip_address": ip_address,
+        "subnet_mask": parsed.get("subnet_mask", ""),
+        "gateway": parsed.get("gateway", ""),
+        "mac_address": mac_address,
+        "discovery": "gvcp",
+    }

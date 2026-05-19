@@ -22,6 +22,7 @@ from scanner_config import (
     USERSET_LOAD_COMMANDS,
     USERSET_SELECTOR_FEATURES,
 )
+from gvcp_discovery import discover_gige_devices
 from scanner_utils import (
     check_ret,
     copy_image_bytes,
@@ -50,16 +51,7 @@ class ScannerReader:
         self.device_info: EasyID.EidDeviceInfo | None = None
 
     def enum_devices(self) -> list[dict[str, Any]]:
-        device_list = EasyID.EidDeviceList()
-        print(device_list, 111)
-        check_ret(
-            EasyID.Camera.eidEnumDevices(device_list, EasyID.EidInterfaceType.eidInterfaceTypeAll),
-            "eidEnumDevices",
-        )
-        devices: list[dict[str, Any]] = []
-        for idx in range(device_list.num):
-            devices.append(self.device_info_to_dict(device_list.infos[idx]))
-        return devices
+        return discover_gige_devices()
 
     def find_device(
         self,
@@ -115,14 +107,16 @@ class ScannerReader:
             ip=ip,
             interface_name=interface_name,
         )
-        device_id = matched.get("device_id") or ""
-        if not device_id:
-            raise RuntimeError("Matched device has empty device_id, cannot create device handle.")
+        create_data, create_type = self._resolve_create_device_params(
+            matched,
+            serial_number=serial_number,
+            ip=ip,
+        )
 
         check_ret(
             self.camera.eidCreateDevice(
-                device_id.encode("ascii"),
-                EasyID.EidDeviceDataType.eidDeviceDataTypeID,
+                create_data.encode("ascii"),
+                create_type,
             ),
             "eidCreateDevice",
         )
@@ -211,6 +205,31 @@ class ScannerReader:
                 self.camera.eidStopGrabbing()
             except Exception:
                 pass
+
+    @staticmethod
+    def _resolve_create_device_params(
+        matched: dict[str, Any],
+        *,
+        serial_number: str | None,
+        ip: str | None,
+    ) -> tuple[str, int]:
+        device_id = matched.get("device_id") or ""
+        if device_id:
+            return device_id, EasyID.EidDeviceDataType.eidDeviceDataTypeID
+
+        target_sn = serial_number or matched.get("serial_number") or ""
+        if target_sn:
+            return target_sn, EasyID.EidDeviceDataType.eidDeviceDataTypeSN
+
+        target_ip = ip or matched.get("ip_address") or ""
+        if target_ip:
+            return target_ip, EasyID.EidDeviceDataType.eidDeviceDataTypeIP
+
+        target_mac = matched.get("mac_address") or ""
+        if target_mac:
+            return target_mac, EasyID.EidDeviceDataType.eidDeviceDataTypeMAC
+
+        raise RuntimeError("Matched device has no usable identifier (device_id/sn/ip/mac).")
 
     @staticmethod
     def device_info_to_dict(info: EasyID.EidDeviceInfo) -> dict[str, Any]:
