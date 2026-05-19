@@ -39,6 +39,26 @@ class GvcpDevice:
     def read_memory(self, address: int, size: int) -> bytes:
         return self.client.read_memory(address, size)
 
+    def read_memory_chunked(self, address: int, size: int, chunk_size: int = 512) -> bytes:
+        if size <= 0:
+            return b""
+        if chunk_size <= 0:
+            chunk_size = 512
+        chunks: list[bytes] = []
+        remaining = size
+        offset = 0
+        while remaining > 0:
+            current = min(remaining, chunk_size)
+            part = self.read_memory(address + offset, current)
+            if len(part) < current:
+                # Some devices cap per-read length; stop on short read to avoid endless retries.
+                chunks.append(part)
+                break
+            chunks.append(part)
+            offset += current
+            remaining -= current
+        return b"".join(chunks)[:size]
+
     def write_memory(self, address: int, data: bytes) -> None:
         self.client.write_memory(address, data)
 

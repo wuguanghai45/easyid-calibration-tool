@@ -43,9 +43,13 @@ def _fetch_single_url(device: GvcpDevice, url: str) -> str:
         filename, addr_hex, size_hex = local_match.groups()
         address = _parse_hex_or_prefixed_int(addr_hex)
         size = _parse_hex_or_prefixed_int(size_hex)
-        payload = device.read_memory(address, size)
-        if filename.lower().endswith(".zip") or payload.startswith(b"PK\x03\x04"):
-            return _decode_xml_from_zip(payload)
+        payload = device.read_memory_chunked(address, size, chunk_size=512)
+        if filename.lower().endswith(".zip") or b"PK\x03\x04" in payload[:32]:
+            try:
+                return _decode_xml_from_zip(payload)
+            except Exception:
+                # Fallback for mislabeled *.zip payloads.
+                return _decode_xml_text(payload)
         return _decode_xml_text(payload)
 
     if normalized.lower().startswith(("http://", "https://")):
@@ -75,7 +79,9 @@ def _decode_xml_text(payload: bytes) -> str:
 
 
 def _decode_xml_from_zip(payload: bytes) -> str:
-    with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+    start = payload.find(b"PK\x03\x04")
+    zipped = payload[start:] if start >= 0 else payload
+    with zipfile.ZipFile(io.BytesIO(zipped)) as archive:
         names = archive.namelist()
         if not names:
             raise RuntimeError("Empty GenICam ZIP payload")
