@@ -21,16 +21,16 @@ def parse_args() -> argparse.Namespace:
     target_group.add_argument(
         "--list-devices",
         action="store_true",
-        help="List discovered scanner devices and exit.",
+        help="List GigE devices via GVCP discovery (replaces SDK eidEnumDevices) and exit.",
     )
     parser.add_argument(
         "--interface",
-        help="Host NIC name filter (matches SDK interface_name).",
+        help="Host NIC name filter (GVCP interface_name, substring match).",
     )
     parser.add_argument(
         "--diag",
         action="store_true",
-        help="Print extra diagnostics when no device is discovered in --list-devices mode.",
+        help="Print extra diagnostics (GVCP + optional SDK eidEnumDevices probe).",
     )
 
     parser.add_argument(
@@ -146,10 +146,13 @@ def _print_discovery_diagnostics(reader: object | None = None) -> None:
     sdk_root = getattr(EasyID, "EASYID_SDK_ROOT", None)
     if sdk_root is not None:
         logging.info("  resolved_sdk_root: %s", sdk_root)
-    if reader is not None and hasattr(reader, "enum_sdk_devices_diagnostics"):
-        logging.info("  SDK eidEnumDevices probe:")
-        for line in reader.enum_sdk_devices_diagnostics():
-            logging.info("    %s", line)
+    if reader is not None:
+        gvcp_devices = reader.enum_devices()
+        logging.info("  gvcp_device_count: %d", len(gvcp_devices))
+        if hasattr(reader, "enum_sdk_devices_diagnostics"):
+            logging.info("  SDK eidEnumDevices probe (optional):")
+            for line in reader.enum_sdk_devices_diagnostics():
+                logging.info("    %s", line)
 
 
 def main() -> int:
@@ -169,12 +172,7 @@ def main() -> int:
 
     try:
         if args.list_devices:
-            devices = reader.enum_devices()
-            if args.interface:
-                needle = args.interface.casefold()
-                devices = [
-                    dev for dev in devices if needle in str(dev.get("interface_name", "")).casefold()
-                ]
+            devices = reader.enum_devices(interface_name=args.interface)
             if not devices:
                 logging.info("No scanner device found.")
                 if args.diag:

@@ -6,7 +6,7 @@
 
 一次完整采集会依次完成：
 
-1. 枚举并连接指定扫码器（序列号或 IP）
+1. 通过 **GVCP** 发现设备并连接指定扫码器（序列号或 IP；不依赖 SDK `eidEnumDevices`）
 2. 保存 `device_info.json`（型号、SN、IP、MAC 等）
 3. 导出 `software_config.xml` 与 `hardware_config.xml`
 4. 软触发采集一帧，保存图像与 `scan_result.json`（解码状态、条码内容、坐标等）
@@ -65,11 +65,20 @@ python read_scanner_calibration.py --ip 192.168.1.100
 
 `--sn` 与 `--ip` 二选一，必填其一。
 
-仅列举当前可发现设备（不采集）：
+仅列举当前可发现设备（不采集，使用 **GVCP** 代替 SDK `eidEnumDevices`）：
 
 ```bash
 python read_scanner_calibration.py --list-devices
 ```
+
+### 设备发现说明
+
+| 方式 | 模块 | 说明 |
+|------|------|------|
+| **GVCP（默认）** | `gvcp_discovery.enum_devices()` | UDP/3956 广播，与网卡绑定；双网卡时请用 `--interface` |
+| SDK `eidEnumDevices` | 仅 `--diag` 探测 | 依赖 GigE 过滤驱动；本工具**不**用它做列表/匹配 |
+
+连接时：GVCP 提供 IP/SN/MAC → `eidCreateDevice` → `eidOpenDevice`。若 GVCP 能发现但连接失败，需检查 SDK 驱动与 `EASYID_RUNENV_64`。
 
 ### 双网卡场景（推荐流程）
 
@@ -89,8 +98,8 @@ python read_scanner_calibration.py --ip 192.168.1.100 --interface "以太网 2"
 
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
-| `--list-devices` | 关闭 | 仅枚举设备并打印列表后退出 |
-| `--interface` | 空 | 按 SDK 返回的 `interface_name` 过滤网卡（支持子串匹配） |
+| `--list-devices` | 关闭 | GVCP 枚举设备并打印列表后退出 |
+| `--interface` | 空 | 按 GVCP 返回的 `interface_name` 过滤网卡（支持子串匹配） |
 | `--output` | `./calibration_out` | 输出根目录；每次运行在其下新建带时间戳的子目录 |
 | `--timeout-ms` | `2000` | 取帧超时（毫秒） |
 | `--buffer-count` | `3` | SDK 采集缓冲区数量 |
@@ -205,9 +214,11 @@ SDK 在错误网卡上枚举（双网卡常见）。请指定 `--interface` 为�
 easyid-calibration-tool/
 ├── read_scanner_calibration.py   # CLI 入口
 ├── scanner_reader.py             # 连接、导出配置、采图流程
-├── scanner_config.py               # 特征名与默认参数
-├── scanner_utils.py                # SDK 封装与图像/JSON 工具
-├── EasyID.py                       # EasyID SDK Python 绑定
+├── gvcp_discovery.py             # GVCP 设备发现（替代 eidEnumDevices）
+├── gige_host.py                  # 多网卡时绑定本机 GigE IP
+├── scanner_config.py             # 特征名与默认参数
+├── scanner_utils.py              # SDK 封装与图像/JSON 工具
+├── EasyID.py                     # EasyID SDK Python 绑定
 └── requirements.txt
 ```
 

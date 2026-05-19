@@ -10,9 +10,8 @@ from typing import Any
 
 import EasyID
 
-logger = logging.getLogger(__name__)
-MAX_DEVICE_NUM = getattr(EasyID, "MAX_DEVICE_NUM", 256)
-
+from gige_host import configure_gige_discovery_host, resolve_bind_ip, try_easyid_bind_exports
+from gvcp_discovery import enum_devices as gvcp_enum_devices
 from scanner_config import (
     DEFAULT_BUFFER_COUNT,
     DEFAULT_FRAME_TIMEOUT_MS,
@@ -27,8 +26,6 @@ from scanner_config import (
     USERSET_LOAD_COMMANDS,
     USERSET_SELECTOR_FEATURES,
 )
-from gige_host import configure_gige_discovery_host, resolve_bind_ip, try_easyid_bind_exports
-from gvcp_discovery import discover_gige_devices
 from scanner_utils import (
     ERROR_CODE_NAMES,
     EasyIDOperationError,
@@ -44,6 +41,11 @@ from scanner_utils import (
     write_json,
 )
 
+logger = logging.getLogger(__name__)
+MAX_DEVICE_NUM = getattr(EasyID, "MAX_DEVICE_NUM", 256)
+DISCOVERY_GVCP = "gvcp"
+DISCOVERY_SDK = "sdk"
+
 
 @dataclass
 class CaptureOptions:
@@ -58,8 +60,18 @@ class ScannerReader:
         self.connected = False
         self.device_info: EasyID.EidDeviceInfo | None = None
 
-    def enum_devices(self) -> list[dict[str, Any]]:
-        return discover_gige_devices()
+    def enum_devices(self, interface_name: str | None = None) -> list[dict[str, Any]]:
+        """Discover devices via GVCP (replaces SDK ``eidEnumDevices`` in this tool)."""
+        devices = gvcp_enum_devices()
+        if interface_name:
+            needle = interface_name.casefold()
+            devices = [
+                dev
+                for dev in devices
+                if needle in str(dev.get("interface_name", "")).casefold()
+            ]
+        logger.info("Discovered %d device(s) via GVCP (eidEnumDevices not used).", len(devices))
+        return devices
 
     def find_device(
         self,
@@ -72,9 +84,9 @@ class ScannerReader:
         if not target:
             raise ValueError("Either serial_number or ip is required.")
 
-        devices = self.enum_devices()
+        devices = self.enum_devices(interface_name=interface_name)
         if not devices:
-            raise RuntimeError("No scanner device found.")
+            raise RuntimeError("No scanner device found (GVCP discovery).")
 
         matched_devices = [
             dev
@@ -82,12 +94,6 @@ class ScannerReader:
             if (serial_number and dev["serial_number"] == serial_number)
             or (ip and dev["ip_address"] == ip)
         ]
-
-        if interface_name:
-            needle = interface_name.casefold()
-            matched_devices = [
-                dev for dev in matched_devices if needle in dev["interface_name"].casefold()
-            ]
 
         if not matched_devices:
             raise RuntimeError(f"Device not found for target={target}")
@@ -115,42 +121,25 @@ class ScannerReader:
             ip=ip,
             interface_name=interface_name,
         )
-        bind_ip = resolve_bind_ip(
+        logger.info(
+            "GVCP matched device: ip=%s sn=%s interface=%s",
+            matched.get("ip_address"),
+            matched.get("serial_number"),
+            matched.get("interface_name"),
+        )
+
+        self._prepare_gige_host(
             device_ip=ip or matched.get("ip_address"),
             interface_name=interface_name or matched.get("interface_name"),
         )
-        if bind_ip:
-            sdk_root = getattr(EasyID, "EASYID_SDK_ROOT", None)
-            for line in configure_gige_discovery_host(bind_ip, sdk_root):
-                logger.info("%s", line)
-            for line in try_easyid_bind_exports(EasyID.EASYID, bind_ip):
-                logger.info("%s", line)
-        else:
-            logger.warning(
-                "Could not resolve host bind IP for interface=%r; "
-                "GigE SDK may enumerate on the wrong NIC.",
-                interface_name or matched.get("interface_name"),
-            )
 
-        # SDK must enumerate devices before eidCreateDevice on many runtime builds.
-        sdk_devices = self.enum_sdk_devices()
-        sdk_device = self._match_sdk_device(
-            sdk_devices,
+        # Optional: SDK enum may add device_id; GVCP is sufficient for discovery.
+        sdk_device = self._try_match_sdk_device(
             gvcp_matched=matched,
             serial_number=serial_number,
             ip=ip,
             interface_name=interface_name,
         )
-        if not sdk_devices:
-            enum_logs = self.enum_sdk_devices_diagnostics()
-            logger.warning(
-                "SDK eidEnumDevices returned no devices (GVCP discovery still found %s). "
-                "Check EASYID_RUNENV_64 points to SDK root, install GigE driver from Drivers folder, "
-                "and replace EasyID.py with Development\\Samples\\Python\\EasyID\\EasyID.py.",
-                matched.get("ip_address") or matched.get("serial_number"),
-            )
-            for line in enum_logs:
-                logger.warning("  %s", line)
 
         create_attempts = self._build_create_device_attempts(
             gvcp_matched=matched,
@@ -165,15 +154,15 @@ class ScannerReader:
             last_ret = self.camera.eidCreateDevice(create_data, create_type)
             if last_ret == EasyID.EidError.eidErrorOK:
                 break
+
         if last_ret != EasyID.EidError.eidErrorOK:
-            hint = (
-                f"SDK enum count={len(sdk_devices)}. "
-                "Try --sn <serial> if --ip fails, and copy EasyID.py from "
-                "Development\\Samples\\Python\\EasyID in the SDK install folder."
-            )
             raise EasyIDOperationError(
-                f"eidCreateDevice failed: {ERROR_CODE_NAMES.get(last_ret, 'unknown')} ({last_ret}). {hint}"
+                "eidCreateDevice failed after GVCP discovery: "
+                f"{ERROR_CODE_NAMES.get(last_ret, 'unknown')} ({last_ret}). "
+                "Device was found by GVCP but SDK could not open it. "
+                "Check GigE driver (Drivers folder), EASYID_RUNENV_64, and try --sn."
             )
+
         check_ret(self.camera.eidOpenDevice(), "eidOpenDevice")
         self.connected = True
 
@@ -181,6 +170,51 @@ class ScannerReader:
         check_ret(self.camera.eidGetDeviceInfo(info), "eidGetDeviceInfo")
         self.device_info = info
         return self.device_info_to_dict(info)
+
+    def _prepare_gige_host(
+        self,
+        *,
+        device_ip: str | None,
+        interface_name: str | None,
+    ) -> None:
+        bind_ip = resolve_bind_ip(device_ip=device_ip, interface_name=interface_name)
+        if not bind_ip:
+            logger.warning(
+                "Could not resolve host bind IP for interface=%r; "
+                "eidCreateDevice may fail on multi-homed PCs.",
+                interface_name,
+            )
+            return
+        sdk_root = getattr(EasyID, "EASYID_SDK_ROOT", None)
+        for line in configure_gige_discovery_host(bind_ip, sdk_root):
+            logger.debug("%s", line)
+        for line in try_easyid_bind_exports(EasyID.EASYID, bind_ip):
+            logger.debug("%s", line)
+
+    def _try_match_sdk_device(
+        self,
+        *,
+        gvcp_matched: dict[str, Any],
+        serial_number: str | None,
+        ip: str | None,
+        interface_name: str | None,
+    ) -> dict[str, Any] | None:
+        try:
+            sdk_devices = self.enum_sdk_devices()
+        except Exception as exc:
+            logger.debug("SDK eidEnumDevices skipped: %s", exc)
+            return None
+        if not sdk_devices:
+            logger.debug("SDK eidEnumDevices returned 0 devices (GVCP discovery used instead).")
+            return None
+        logger.info("SDK eidEnumDevices returned %d device(s) (optional enrichment).", len(sdk_devices))
+        return self._match_sdk_device(
+            sdk_devices,
+            gvcp_matched=gvcp_matched,
+            serial_number=serial_number,
+            ip=ip,
+            interface_name=interface_name,
+        )
 
     def disconnect(self) -> None:
         if not self.connected:
@@ -261,8 +295,11 @@ class ScannerReader:
                 pass
 
     def enum_sdk_devices(self) -> list[dict[str, Any]]:
+        """Optional SDK transport enumeration (often returns empty; use ``enum_devices`` instead)."""
         EasyID.initialize_runtime()
         devices, _logs = self._enum_sdk_devices_internal(log_each_attempt=False)
+        for dev in devices:
+            dev["discovery"] = DISCOVERY_SDK
         return devices
 
     def enum_sdk_devices_diagnostics(self) -> list[str]:
@@ -377,7 +414,7 @@ class ScannerReader:
         serial_number: str | None,
         ip: str | None,
     ) -> list[tuple[str, int]]:
-        """Build ordered eidCreateDevice attempts; CLI args take priority over SDK device_id."""
+        """Build eidCreateDevice attempts from GVCP discovery (primary) and optional SDK enum."""
         attempts: list[tuple[str, int]] = []
         seen: set[tuple[str, int]] = set()
 
@@ -399,25 +436,24 @@ class ScannerReader:
             add(normalized.replace(":", ""), EasyID.EidDeviceDataType.eidDeviceDataTypeMAC)
             add(normalized.replace(":", "").upper(), EasyID.EidDeviceDataType.eidDeviceDataTypeMAC)
 
-        # SDK manual default identifier is serial number; prefer SDK-matched fields first.
-        if sdk_device:
-            add(sdk_device.get("serial_number"), EasyID.EidDeviceDataType.eidDeviceDataTypeSN)
-            add(sdk_device.get("device_id"), EasyID.EidDeviceDataType.eidDeviceDataTypeID)
-            add(sdk_device.get("ip_address"), EasyID.EidDeviceDataType.eidDeviceDataTypeIP)
-            add_mac(sdk_device.get("mac_address"))
+        # GVCP discovery (replaces eidEnumDevices for device identification).
+        add(gvcp_matched.get("serial_number"), EasyID.EidDeviceDataType.eidDeviceDataTypeSN)
+        add(gvcp_matched.get("ip_address"), EasyID.EidDeviceDataType.eidDeviceDataTypeIP)
+        add_mac(gvcp_matched.get("mac_address"))
 
         if serial_number:
             add(serial_number, EasyID.EidDeviceDataType.eidDeviceDataTypeSN)
         if ip:
             add(ip, EasyID.EidDeviceDataType.eidDeviceDataTypeIP)
 
-        add(gvcp_matched.get("serial_number"), EasyID.EidDeviceDataType.eidDeviceDataTypeSN)
-        add(gvcp_matched.get("ip_address"), EasyID.EidDeviceDataType.eidDeviceDataTypeIP)
-        add_mac(gvcp_matched.get("mac_address"))
-        add(gvcp_matched.get("device_id"), EasyID.EidDeviceDataType.eidDeviceDataTypeID)
+        if sdk_device:
+            add(sdk_device.get("serial_number"), EasyID.EidDeviceDataType.eidDeviceDataTypeSN)
+            add(sdk_device.get("device_id"), EasyID.EidDeviceDataType.eidDeviceDataTypeID)
+            add(sdk_device.get("ip_address"), EasyID.EidDeviceDataType.eidDeviceDataTypeIP)
+            add_mac(sdk_device.get("mac_address"))
 
         if not attempts:
-            raise RuntimeError("Matched device has no usable identifier (device_id/sn/ip/mac).")
+            raise RuntimeError("Matched device has no usable identifier (sn/ip/mac).")
         return attempts
 
     @staticmethod
@@ -447,6 +483,7 @@ class ScannerReader:
             "subnet_mask": decode_cstr(info.gigeDeviceInfo.subnetMask),
             "gateway": decode_cstr(info.gigeDeviceInfo.defaultGateWay),
             "mac_address": decode_cstr(info.gigeDeviceInfo.macAddress),
+            "discovery": DISCOVERY_SDK,
         }
 
     def _select_userset(self, symbols: tuple[str, ...]) -> None:
@@ -458,7 +495,6 @@ class ScannerReader:
         try:
             exec_command_feature(self.camera, USERSET_LOAD_COMMANDS)
         except Exception:
-            # Some models apply selector immediately without load command.
             pass
 
     def _prepare_soft_trigger(self) -> None:

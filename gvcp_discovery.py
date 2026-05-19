@@ -326,6 +326,16 @@ def _discovery_targets() -> list[tuple[str | None, str, str]]:
     return targets
 
 
+def enum_devices(timeout_s: float = DEFAULT_DISCOVERY_TIMEOUT_S) -> list[dict[str, Any]]:
+    """Enumerate GigE devices via GVCP (UDP/3956).
+
+    Drop-in replacement for ``EasyID.Camera.eidEnumDevices`` when the SDK GigE
+    transport returns ``num=0`` (common with dual-NIC PCs or missing filter driver).
+    Returned dicts use the same keys as ``ScannerReader.device_info_to_dict``.
+    """
+    return discover_gige_devices(timeout_s)
+
+
 def discover_gige_devices(timeout_s: float = DEFAULT_DISCOVERY_TIMEOUT_S) -> list[dict[str, Any]]:
     packet = build_discovery_command()
     devices_by_mac: dict[str, dict[str, Any]] = {}
