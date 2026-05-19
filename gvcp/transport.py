@@ -56,7 +56,9 @@ class GvcpClient:
         ack_payload = self._request_response(GVCP_CMD_READMEM, GVCP_ACK_READMEM, payload)
         if len(ack_payload) <= 4:
             return b""
-        return ack_payload[4:]
+        # Some devices may return more bytes than requested in a single ACK.
+        # Keep exactly requested size to avoid caller-side offset drift.
+        return ack_payload[4:][:size]
 
     def write_memory(self, address: int, data: bytes) -> None:
         payload = struct.pack("!I", address & 0xFFFFFFFF) + data
