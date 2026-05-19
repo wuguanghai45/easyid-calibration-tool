@@ -85,7 +85,7 @@ def _parse_hex_or_prefixed_int(value: str) -> int:
 
 
 def _decode_xml_text(payload: bytes) -> str:
-    body = payload.split(b"\x00", 1)[0]
+    body = _extract_xml_bytes(payload)
     for encoding in ("utf-8", "utf-16-le", "gbk", "latin-1"):
         try:
             return body.decode(encoding)
@@ -105,4 +105,29 @@ def _decode_xml_from_zip(payload: bytes) -> str:
         target = xml_names[0] if xml_names else names[0]
         data = archive.read(target)
     return _decode_xml_text(data)
+
+
+def _extract_xml_bytes(payload: bytes) -> bytes:
+    """Trim binary wrappers and keep only XML document bytes."""
+    if not payload:
+        return payload
+    # Prefer explicit XML declaration.
+    start = payload.find(b"<?xml")
+    if start < 0:
+        # Some files start directly with root element.
+        for marker in (b"<RegisterDescription", b"<RegisterDescriptionModel", b"<Docu"):
+            start = payload.find(marker)
+            if start >= 0:
+                break
+    if start < 0:
+        # Keep previous behavior for unknown payload.
+        return payload.split(b"\x00", 1)[0]
+
+    xml_part = payload[start:]
+    # Try to cut at common closing tags to remove trailing binary tail.
+    for end_marker in (b"</RegisterDescription>", b"</RegisterDescriptionModel>", b"</Docu>"):
+        end = xml_part.find(end_marker)
+        if end >= 0:
+            return xml_part[: end + len(end_marker)]
+    return xml_part
 

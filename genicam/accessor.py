@@ -26,8 +26,8 @@ class GenicamAccessor:
 
     def __init__(self, device: GvcpDevice, xml_text: str) -> None:
         self.device = device
-        self.xml_text = xml_text
-        self._root = ET.fromstring(xml_text)
+        self.xml_text = _normalize_xml_text(xml_text)
+        self._root = ET.fromstring(self.xml_text)
         self._registers = self._load_registers()
 
     def _load_registers(self) -> dict[str, RegisterNode]:
@@ -131,4 +131,20 @@ def _child_text(parent: ET.Element, child_tag: str) -> str | None:
         if _strip_namespace(child.tag) == child_tag and child.text:
             return child.text.strip()
     return None
+
+
+def _normalize_xml_text(xml_text: str) -> str:
+    text = xml_text.lstrip("\ufeff\x00 \t\r\n")
+    xml_decl = text.find("<?xml")
+    if xml_decl >= 0:
+        text = text[xml_decl:]
+    else:
+        root_idx = text.find("<")
+        if root_idx > 0:
+            text = text[root_idx:]
+    for end_tag in ("</RegisterDescription>", "</RegisterDescriptionModel>", "</Docu>"):
+        end = text.find(end_tag)
+        if end >= 0:
+            return text[: end + len(end_tag)]
+    return text
 
