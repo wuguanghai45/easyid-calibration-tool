@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from ctypes import byref
 from typing import TYPE_CHECKING
 
 from imv_sdk.IMVDefines import IMV_OK, IMV_String
@@ -31,7 +30,7 @@ def dump_readable_features(cam: MvCamera) -> dict[str, list[str]]:
         if not cam.IMV_FeatureIsReadable(feature):
             continue
         symbol = IMV_String()
-        if cam.IMV_GetEnumFeatureSymbol(feature, byref(symbol)) == IMV_OK:
+        if cam.IMV_GetEnumFeatureSymbol(feature, symbol) == IMV_OK:
             current = symbol.str.decode("utf-8", errors="replace").strip("\x00")
             result.setdefault(feature, []).append(f"current={current}")
     return result
