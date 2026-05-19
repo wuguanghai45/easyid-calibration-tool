@@ -155,6 +155,13 @@ def _print_discovery_diagnostics(reader: object | None = None) -> None:
 def main() -> int:
     setup_logging()
     args = parse_args()
+    # Resolve before importing EasyID (import must not change the process cwd).
+    base_output = Path(args.output).expanduser()
+    if not base_output.is_absolute():
+        base_output = (Path.cwd() / base_output).resolve()
+    else:
+        base_output = base_output.resolve()
+
     from scanner_reader import CaptureOptions, ScannerReader
     from scanner_utils import write_json
 
@@ -177,7 +184,6 @@ def main() -> int:
             return 0
 
         identity = args.sn or args.ip
-        base_output = Path(args.output).expanduser().resolve()
         session_dir = make_session_dir(base_output, identity)
         logging.info("Session output: %s", session_dir)
 
