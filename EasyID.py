@@ -622,21 +622,63 @@ class Camera():
         return EASYID.eidEnumDevices(byref(deviceList), c_uint32(type))
 
     def eidCreateDevice(self, data: str, type: int) -> int:
-        # C原型:EASYID_API EidCamera EASYID_CALL eidCreateDevice(const char* data, EidDeviceDataType type);
+        # SDK manual: Python wrapper returns error code; handle via out-param on many builds.
         payload = data.encode("ascii") if isinstance(data, str) else data
-        EASYID.eidCreateDevice.argtypes = (c_char_p, c_int)
+        self.handle = c_void_p()
+        fn = EASYID.eidCreateDevice
+        device_type = c_int(type)
 
-        # Try POINTER(c_void_p) (official Python sample) then c_void_p (direct handle value).
-        for restype in (POINTER(c_void_p), c_void_p):
-            EASYID.eidCreateDevice.restype = restype
-            result = EASYID.eidCreateDevice(payload, c_int(type))
-            if not result:
-                continue
-            if restype is POINTER(c_void_p):
+        def _ok(ret: int, handle: c_void_p) -> bool:
+            if ret != EidError.eidErrorOK:
+                return False
+            if handle and (handle.value if hasattr(handle, "value") else int(handle)):
+                self.handle = handle
+                return True
+            return False
+
+        # (data, type, &handle) -> int
+        try:
+            fn.argtypes = (c_char_p, c_int, POINTER(c_void_p))
+            fn.restype = c_int
+            out = c_void_p()
+            ret = int(fn(payload, device_type, byref(out)))
+            if _ok(ret, out):
+                return EidError.eidErrorOK
+        except (TypeError, OSError, ValueError):
+            pass
+
+        # (&handle, data, type) -> int
+        try:
+            fn.argtypes = (POINTER(c_void_p), c_char_p, c_int)
+            fn.restype = c_int
+            out = c_void_p()
+            ret = int(fn(byref(out), payload, device_type))
+            if _ok(ret, out):
+                return EidError.eidErrorOK
+        except (TypeError, OSError, ValueError):
+            pass
+
+        # Official sample: returns camera pointer directly
+        try:
+            fn.argtypes = (c_char_p, c_int)
+            fn.restype = POINTER(c_void_p)
+            result = fn(payload, device_type)
+            if result:
                 self.handle = result
-            else:
+                return EidError.eidErrorOK
+        except (TypeError, OSError, ValueError):
+            pass
+
+        try:
+            fn.argtypes = (c_char_p, c_int)
+            fn.restype = c_void_p
+            result = fn(payload, device_type)
+            if result:
                 self.handle = result if isinstance(result, c_void_p) else c_void_p(result)
-            return EidError.eidErrorOK
+                return EidError.eidErrorOK
+        except (TypeError, OSError, ValueError):
+            pass
+
         self.handle = c_void_p()
         return EidError.eidErrorInvalidParameter
 

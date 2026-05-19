@@ -10,6 +10,7 @@ from typing import Any
 
 import EasyID
 
+from easyid_gvcp_bridge import try_create_device_from_gvcp_info
 from gige_host import configure_gige_discovery_host, resolve_bind_ip, try_easyid_bind_exports
 from gvcp_discovery import enum_devices as gvcp_enum_devices
 from scanner_config import (
@@ -141,19 +142,27 @@ class ScannerReader:
             interface_name=interface_name,
         )
 
-        create_attempts = self._build_create_device_attempts(
-            gvcp_matched=matched,
-            sdk_device=sdk_device,
-            serial_number=serial_number,
-            ip=ip,
-        )
-        last_ret = EasyID.EidError.eidErrorInvalidParameter
-        for create_data, create_type in create_attempts:
-            type_name = self._device_data_type_name(create_type)
-            logger.info("eidCreateDevice: data=%r type=%s", create_data, type_name)
-            last_ret = self.camera.eidCreateDevice(create_data, create_type)
-            if last_ret == EasyID.EidError.eidErrorOK:
-                break
+        # Refresh SDK device table after host NIC bind (may enable eidEnumDevices).
+        self._probe_sdk_enum_after_bind()
+
+        create_ret = try_create_device_from_gvcp_info(self.camera, matched)
+        if create_ret == EasyID.EidError.eidErrorOK:
+            logger.info("eidCreateDevice succeeded via EidDeviceInfo (GVCP bridge).")
+            last_ret = EasyID.EidError.eidErrorOK
+        else:
+            create_attempts = self._build_create_device_attempts(
+                gvcp_matched=matched,
+                sdk_device=sdk_device,
+                serial_number=serial_number,
+                ip=ip,
+            )
+            last_ret = EasyID.EidError.eidErrorInvalidParameter
+            for create_data, create_type in create_attempts:
+                type_name = self._device_data_type_name(create_type)
+                logger.info("eidCreateDevice: data=%r type=%s", create_data, type_name)
+                last_ret = self.camera.eidCreateDevice(create_data, create_type)
+                if last_ret == EasyID.EidError.eidErrorOK:
+                    break
 
         if last_ret != EasyID.EidError.eidErrorOK:
             raise EasyIDOperationError(
@@ -170,6 +179,19 @@ class ScannerReader:
         check_ret(self.camera.eidGetDeviceInfo(info), "eidGetDeviceInfo")
         self.device_info = info
         return self.device_info_to_dict(info)
+
+    def _probe_sdk_enum_after_bind(self) -> None:
+        try:
+            devices = self.enum_sdk_devices()
+        except Exception as exc:
+            logger.debug("SDK enum after NIC bind failed: %s", exc)
+            return
+        if devices:
+            logger.info(
+                "SDK eidEnumDevices found %d device(s) after GigE host bind.", len(devices)
+            )
+        else:
+            logger.debug("SDK eidEnumDevices still empty after GigE host bind.")
 
     def _prepare_gige_host(
         self,
