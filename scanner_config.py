@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 
-# Candidate feature names from common EasyID samples/models.
+# Candidate GenICam feature names for common scanner/camera models.
 USERSET_SELECTOR_FEATURES = (
     "UserSetSelector",
     "DeviceUserSetSelector",

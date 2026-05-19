@@ -1,4 +1,4 @@
-"""Generic utilities for pure GVCP/GigE Vision workflow."""
+"""Generic utilities for scanner calibration workflow."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ except Exception:  # pragma: no cover - optional dependency
 
 
 class ScannerProtocolError(RuntimeError):
-    """Raised when GVCP/GVSP protocol operations fail."""
+    """Raised when IMV SDK operations fail."""
 
 
 def ensure_dir(path: Path) -> None:

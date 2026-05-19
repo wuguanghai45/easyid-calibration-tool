@@ -9,6 +9,8 @@ import logging
 import socket
 from pathlib import Path
 
+from scanner_config import DEFAULT_BUFFER_COUNT, DEFAULT_FRAME_TIMEOUT_MS
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -20,21 +22,21 @@ def parse_args() -> argparse.Namespace:
     target_group.add_argument(
         "--list-devices",
         action="store_true",
-        help="List GigE devices via GVCP discovery and exit.",
+        help="List devices via IMV SDK enumeration and exit.",
     )
     parser.add_argument(
         "--interface",
-        help="Host NIC name filter (GVCP interface_name, substring match).",
+        help="Host NIC filter (device interface_name or local IPv4 substring).",
     )
     parser.add_argument(
         "--diag",
         action="store_true",
-        help="Print extra diagnostics for GVCP/GVSP workflow.",
+        help="Print extra diagnostics for IMV SDK workflow.",
     )
     parser.add_argument(
         "--debug",
         action="store_true",
-        help="Enable verbose debug logs for protocol analysis.",
+        help="Enable verbose debug logs.",
     )
 
     parser.add_argument(
@@ -45,19 +47,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--timeout-ms",
         type=int,
-        default=2000,
+        default=DEFAULT_FRAME_TIMEOUT_MS,
         help="Frame timeout in milliseconds.",
     )
     parser.add_argument(
         "--buffer-count",
         type=int,
-        default=3,
-        help="Reserved for GVSP buffer sizing (currently informational).",
+        default=DEFAULT_BUFFER_COUNT,
+        help="IMV frame buffer count (IMV_SetBufferCount).",
     )
     parser.add_argument(
         "--no-clear-buffer",
         action="store_true",
-        help="Reserved compatibility flag in pure GVCP mode.",
+        help="Skip clearing frame buffer before soft trigger.",
     )
     parser.add_argument(
         "--dump-features",
@@ -131,8 +133,9 @@ def _print_discovery_diagnostics(reader: object | None = None) -> None:
     logging.info("  hostname: %s", host_name)
     logging.info("  local_ipv4: %s", ", ".join(ipv4_list) if ipv4_list else "(none)")
     if reader is not None:
-        gvcp_devices = reader.enum_devices()
-        logging.info("  gvcp_device_count: %d", len(gvcp_devices))
+        logging.info("  sdk_version: %s", reader.get_sdk_version())
+        imv_devices = reader.enum_devices()
+        logging.info("  imv_device_count: %d", len(imv_devices))
 
 
 def main() -> int:
