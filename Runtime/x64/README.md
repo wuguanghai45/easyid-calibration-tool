@@ -1,9 +1,9 @@
 # MVSDK Windows x64 Runtime
 
-Place the vendor **x64** runtime files here. The calibration tool loads:
+Copy the **entire** `Runtime/x64` folder from the Huaray/IMV SDK installer into this directory.
 
-- `MVSDKmd.dll` (required)
+`MVSDKmd.dll` alone is not enough — it depends on other DLLs in the same folder (e.g. GenICam / transport libraries). If only one DLL is present, `LoadLibrary` will fail.
 
-If `LoadLibrary` fails with a missing dependency error, copy **all** DLLs from the SDK installer `Runtime/x64` folder into this directory (not only `MVSDKmd.dll`).
+After copy, this folder should contain multiple `.dll` files (typical install: 5–20+ files).
 
-No `IMV_SDK_LIB` environment variable is required when `MVSDKmd.dll` is present in this path.
+`IMV_SDK_LIB` is optional when `MVSDKmd.dll` is here and dependencies are alongside it.
