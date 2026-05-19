@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ipaddress
+import locale
 import re
 import socket
 import struct
@@ -150,14 +151,82 @@ def _iter_host_interfaces_unix() -> list[HostInterface]:
     return interfaces
 
 
-def _iter_host_interfaces_windows() -> list[HostInterface]:
+def _windows_console_encoding() -> str:
+    preferred = locale.getpreferredencoding(False) or "utf-8"
+    if sys.platform == "win32" and preferred.lower().startswith("utf"):
+        return "cp936"
+    return preferred
+
+
+def _iter_host_interfaces_windows_powershell() -> list[HostInterface]:
+    script = (
+        "Get-NetIPAddress -AddressFamily IPv4 | "
+        "Where-Object { $_.IPAddress -notlike '127.*' } | "
+        "ForEach-Object { "
+        "$_.InterfaceAlias + '|' + $_.IPAddress + '|' + $_.PrefixLength "
+        "}"
+    )
+    try:
+        proc = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", script],
+            capture_output=True,
+            text=True,
+            timeout=8,
+            encoding=_windows_console_encoding(),
+            errors="replace",
+            check=False,
+        )
+    except Exception:
+        return []
+
+    if proc.returncode != 0:
+        return []
+
+    interfaces: list[HostInterface] = []
+    for line in proc.stdout.splitlines():
+        parts = line.strip().split("|")
+        if len(parts) != 3:
+            continue
+        name, ip, prefix_raw = parts
+        if not name or ip.startswith("127."):
+            continue
+        try:
+            prefix = int(prefix_raw)
+            network = ipaddress.IPv4Network(f"{ip}/{prefix}", strict=False)
+        except ValueError:
+            continue
+        interfaces.append(
+            HostInterface(
+                name=name.strip(),
+                ip=ip.strip(),
+                broadcast=str(network.broadcast_address),
+            )
+        )
+    return interfaces
+
+
+def _strip_windows_adapter_prefix(adapter_line: str) -> str:
+    name = adapter_line.rstrip(":").strip()
+    prefixes = (
+        "以太网适配器 ",
+        "无线局域网适配器 ",
+        "Ethernet adapter ",
+        "Wireless LAN adapter ",
+    )
+    for prefix in prefixes:
+        if name.startswith(prefix):
+            return name[len(prefix) :].strip()
+    return name
+
+
+def _iter_host_interfaces_windows_ipconfig() -> list[HostInterface]:
     try:
         proc = subprocess.run(
             ["ipconfig"],
             capture_output=True,
             text=True,
             timeout=5,
-            encoding="utf-8",
+            encoding=_windows_console_encoding(),
             errors="replace",
             check=False,
         )
@@ -172,13 +241,12 @@ def _iter_host_interfaces_windows() -> list[HostInterface]:
     current_ip = ""
     current_mask = ""
 
-    adapter_re = re.compile(r"^(?:以太网适配器|无线局域网适配器|Wireless LAN adapter|Ethernet adapter)\s*(.+):\s*$")
     ipv4_re = re.compile(
-        r"^\s*(?:IPv4 地址|IPv4 Address)[^:]*:\s*(\d+\.\d+\.\d+\.\d+)\s*$",
+        r"(?:IPv4\s*地址|IPv4\s*Address)[^:]*:\s*(\d+\.\d+\.\d+\.\d+)",
         re.IGNORECASE,
     )
     mask_re = re.compile(
-        r"^\s*(?:子网掩码|Subnet Mask)[^:]*:\s*(\d+\.\d+\.\d+\.\d+)\s*$",
+        r"(?:子网掩码|Subnet\s*Mask)[^:]*:\s*(\d+\.\d+\.\d+\.\d+)",
         re.IGNORECASE,
     )
 
@@ -192,7 +260,7 @@ def _iter_host_interfaces_windows() -> list[HostInterface]:
         if broadcast:
             interfaces.append(
                 HostInterface(
-                    name=current_name.strip(),
+                    name=current_name,
                     ip=current_ip,
                     broadcast=broadcast,
                 )
@@ -201,21 +269,28 @@ def _iter_host_interfaces_windows() -> list[HostInterface]:
         current_mask = ""
 
     for line in proc.stdout.splitlines():
-        adapter_match = adapter_re.match(line)
-        if adapter_match:
+        stripped = line.rstrip()
+        if stripped and not stripped.startswith((" ", "\t")) and stripped.endswith(":"):
             flush()
-            current_name = adapter_match.group(1)
+            current_name = _strip_windows_adapter_prefix(stripped)
             continue
-        ip_match = ipv4_re.match(line)
+        ip_match = ipv4_re.search(line)
         if ip_match:
             current_ip = ip_match.group(1)
             continue
-        mask_match = mask_re.match(line)
+        mask_match = mask_re.search(line)
         if mask_match:
             current_mask = mask_match.group(1)
 
     flush()
     return interfaces
+
+
+def _iter_host_interfaces_windows() -> list[HostInterface]:
+    interfaces = _iter_host_interfaces_windows_powershell()
+    if interfaces:
+        return interfaces
+    return _iter_host_interfaces_windows_ipconfig()
 
 
 def _discovery_targets() -> list[tuple[str | None, str, str]]:
@@ -241,6 +316,7 @@ def discover_gige_devices(timeout_s: float = DEFAULT_DISCOVERY_TIMEOUT_S) -> lis
     per_socket_timeout = max(timeout_s / max(len(_discovery_targets()), 1), 0.2)
 
     for bind_ip, destination, interface_name in _discovery_targets():
+        print(bind_ip, destination, interface_name, "discover_gige_devices")
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         try:
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
