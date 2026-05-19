@@ -164,7 +164,7 @@ class ScannerReader:
         timeout_s = max(options.timeout_ms / 1000.0, 0.2)
         receiver = GvspReceiver(self.bind_ip, timeout_s=timeout_s)
         try:
-            configure_stream_channel(self.device, self.bind_ip, receiver.port)
+            configure_stream_channel(self.device, self.bind_ip, receiver.port, accessor=self.accessor)
             self._prepare_soft_trigger()
             self._trigger_once()
             frame = receiver.capture_frame(timeout_s)

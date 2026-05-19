@@ -100,6 +100,22 @@ class GenicamAccessor:
         self.device.write_register(register.address, int(command_value_text, 0))
         return True
 
+    def set_integer_feature(self, feature_name: str, value: int) -> bool:
+        feature = self._find_feature_node(feature_name)
+        register: RegisterNode | None = None
+        if feature is not None:
+            # GenICam Integer nodes usually reference an IntReg via pValue.
+            value_ref = _child_text(feature, "pValue")
+            if value_ref:
+                register = self._registers.get(value_ref)
+        if register is None:
+            # Some XMLs expose register directly with the feature name.
+            register = self._registers.get(feature_name)
+        if register is None:
+            return False
+        self.device.write_register(register.address, int(value))
+        return True
+
     def _find_enum_value(self, enum_node: ET.Element, symbol: str) -> int | None:
         candidate_nodes: dict[str, ET.Element] = {}
         for node in self._root.iter():
