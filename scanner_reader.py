@@ -124,11 +124,15 @@ class ScannerReader:
             interface_name=interface_name,
         )
         if not sdk_devices:
+            enum_logs = self.enum_sdk_devices_diagnostics()
             logger.warning(
                 "SDK eidEnumDevices returned no devices (GVCP discovery still found %s). "
-                "Check EASYID_RUNENV_64, GigE drivers, and use SDK-bundled EasyID.py.",
+                "Check EASYID_RUNENV_64 points to SDK root, install GigE driver from Drivers folder, "
+                "and replace EasyID.py with Development\\Samples\\Python\\EasyID\\EasyID.py.",
                 matched.get("ip_address") or matched.get("serial_number"),
             )
+            for line in enum_logs:
+                logger.warning("  %s", line)
 
         create_attempts = self._build_create_device_attempts(
             gvcp_matched=matched,
@@ -239,38 +243,70 @@ class ScannerReader:
                 pass
 
     def enum_sdk_devices(self) -> list[dict[str, Any]]:
+        EasyID.initialize_runtime()
+        devices, _logs = self._enum_sdk_devices_internal(log_each_attempt=False)
+        return devices
+
+    def enum_sdk_devices_diagnostics(self) -> list[str]:
+        EasyID.initialize_runtime()
+        _devices, logs = self._enum_sdk_devices_internal(log_each_attempt=True)
+        return logs
+
+    def _enum_sdk_devices_internal(self, *, log_each_attempt: bool) -> tuple[list[dict[str, Any]], list[str]]:
         devices: list[dict[str, Any]] = []
+        logs: list[str] = []
         seen: set[str] = set()
         interface_types = (
             EasyID.EidInterfaceType.eidInterfaceTypeGige,
             0,
             EasyID.EidInterfaceType.eidInterfaceTypeAll,
         )
-        for interface_type in interface_types:
-            for preallocate in (True, False):
-                device_list = EasyID.EidDeviceList()
-                backing = None
-                if preallocate:
-                    backing = (EasyID.EidDeviceInfo * MAX_DEVICE_NUM)()
-                    device_list.infos = cast(backing, POINTER(EasyID.EidDeviceInfo))
+        layouts: tuple[tuple[str, type], ...] = (
+            ("pointer+prealloc", EasyID.EidDeviceList),
+            ("pointer", EasyID.EidDeviceList),
+            ("inline", EasyID.EidDeviceListInline),
+        )
 
-                ret = EasyID.Camera.eidEnumDevices(device_list, interface_type)
-                if ret != EasyID.EidError.eidErrorOK:
-                    continue
-                if not device_list.infos:
-                    continue
+        for layout_name, list_type in layouts:
+            for interface_type in interface_types:
+                for preallocate in (True, False) if layout_name != "inline" else (False,):
+                    device_list = list_type()
+                    backing = None
+                    if layout_name == "pointer+prealloc":
+                        backing = (EasyID.EidDeviceInfo * MAX_DEVICE_NUM)()
+                        device_list.infos = cast(backing, POINTER(EasyID.EidDeviceInfo))
 
-                count = min(int(device_list.num), MAX_DEVICE_NUM)
-                for idx in range(count):
-                    dev = self.device_info_to_dict(device_list.infos[idx])
-                    key = dev.get("serial_number") or dev.get("ip_address") or dev.get("device_id")
-                    if not key or key in seen:
+                    ret = EasyID.Camera.eidEnumDevices(device_list, interface_type)
+                    count = min(int(device_list.num), MAX_DEVICE_NUM)
+                    log_line = (
+                        f"sdk_enum layout={layout_name} iface=0x{interface_type & 0xFFFFFFFF:08X} "
+                        f"prealloc={preallocate} ret={ret} num={count}"
+                    )
+                    logs.append(log_line)
+                    if log_each_attempt:
+                        logger.info(log_line)
+
+                    if ret != EasyID.EidError.eidErrorOK or count == 0:
                         continue
-                    seen.add(key)
-                    devices.append(dev)
-                if devices:
-                    return devices
-        return devices
+
+                    for idx in range(count):
+                        if layout_name == "inline":
+                            info = device_list.infos[idx]
+                        elif backing is not None:
+                            info = backing[idx]
+                        elif device_list.infos:
+                            info = device_list.infos[idx]
+                        else:
+                            break
+                        dev = self.device_info_to_dict(info)
+                        key = dev.get("serial_number") or dev.get("ip_address") or dev.get("device_id")
+                        if not key or key in seen:
+                            continue
+                        seen.add(key)
+                        devices.append(dev)
+                    if devices:
+                        return devices, logs
+        return devices, logs
 
     @staticmethod
     def _normalize_mac(mac: str) -> str:

@@ -119,7 +119,7 @@ def _collect_local_ipv4_addresses() -> list[str]:
     return sorted(addresses)
 
 
-def _print_discovery_diagnostics() -> None:
+def _print_discovery_diagnostics(reader: object | None = None) -> None:
     sdk_version = "unknown"
     try:
         import EasyID
@@ -143,6 +143,13 @@ def _print_discovery_diagnostics() -> None:
     logging.info("  local_ipv4: %s", ", ".join(ipv4_list) if ipv4_list else "(none)")
     logging.info("  EASYID_RUNENV_64: %s", runenv64 or "(not set)")
     logging.info("  EASYID_RUNENV_32: %s", runenv32 or "(not set)")
+    sdk_root = getattr(EasyID, "EASYID_SDK_ROOT", None)
+    if sdk_root is not None:
+        logging.info("  resolved_sdk_root: %s", sdk_root)
+    if reader is not None and hasattr(reader, "enum_sdk_devices_diagnostics"):
+        logging.info("  SDK eidEnumDevices probe:")
+        for line in reader.enum_sdk_devices_diagnostics():
+            logging.info("    %s", line)
 
 
 def main() -> int:
@@ -164,7 +171,7 @@ def main() -> int:
             if not devices:
                 logging.info("No scanner device found.")
                 if args.diag:
-                    _print_discovery_diagnostics()
+                    _print_discovery_diagnostics(reader)
                 return 0
             _print_device_table(devices)
             return 0

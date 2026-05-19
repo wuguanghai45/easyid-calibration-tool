@@ -60,6 +60,77 @@ def _configure_windows_dll_search(sdk_root: Path, runtime_dir: Path) -> None:
         os.environ["PATH"] = os.pathsep.join(added) + os.pathsep + os.environ.get("PATH", "")
 
 
+def _configure_genicam_environment(sdk_root: Path, is_64bit: bool) -> None:
+    cti_dirs: list[str] = []
+    for cti_file in sdk_root.rglob("*.cti"):
+        cti_dirs.append(str(cti_file.parent.resolve()))
+    if not cti_dirs:
+        return
+    env_key = "GENICAM_GENTL64_PATH" if is_64bit else "GENICAM_GENTL32_PATH"
+    merged = os.pathsep.join(dict.fromkeys(cti_dirs))
+    existing = os.environ.get(env_key, "")
+    os.environ[env_key] = merged if not existing else merged + os.pathsep + existing
+
+
+def _preload_dependent_dlls(sdk_root: Path, runtime_dir: Path) -> None:
+    if os_name != "Windows":
+        return
+    preferred = (
+        "GigEAPI.dll",
+        "MvGigEDev.dll",
+        "MvCameraControl.dll",
+        "MvGigEVisionSDK.dll",
+        "GenCP.dll",
+        "GEVManager.dll",
+        "MvUsb3vTL.dll",
+    )
+    loaded: set[str] = set()
+    search_roots = [runtime_dir, sdk_root, sdk_root / "Drivers"]
+    for name in preferred:
+        for root in search_roots:
+            if not root.is_dir():
+                continue
+            for dll_path in root.rglob(name):
+                key = str(dll_path.resolve())
+                if key in loaded:
+                    continue
+                loaded.add(key)
+                try:
+                    WinDLL(key)
+                except OSError:
+                    pass
+    for root in search_roots:
+        if not root.is_dir():
+            continue
+        for dll_path in root.rglob("*.dll"):
+            if dll_path.name.lower() == "easyid.dll":
+                continue
+            key = str(dll_path.resolve())
+            if key in loaded:
+                continue
+            loaded.add(key)
+            try:
+                WinDLL(key)
+            except OSError:
+                pass
+
+
+_RUNTIME_INITIALIZED = False
+EASYID_SDK_ROOT: Path | None = None
+EASYID_RUNTIME_DIR: Path | None = None
+
+
+def initialize_runtime() -> None:
+    global _RUNTIME_INITIALIZED
+    if _RUNTIME_INITIALIZED or os_name != "Windows":
+        _RUNTIME_INITIALIZED = True
+        return
+    if EASYID_SDK_ROOT is not None and EASYID_RUNTIME_DIR is not None:
+        _configure_genicam_environment(EASYID_SDK_ROOT, bits == "64bit")
+        _preload_dependent_dlls(EASYID_SDK_ROOT, EASYID_RUNTIME_DIR)
+    _RUNTIME_INITIALIZED = True
+
+
 if os_name == 'Windows':
     is_64bit = bits == '64bit'
     EASYID_RUNENV = "EASYID_RUNENV_64" if is_64bit else "EASYID_RUNENV_32"
@@ -73,7 +144,10 @@ if os_name == 'Windows':
         print(f"EasyID.dll not found: {lib_path}")
         sys.exit()
     _configure_windows_dll_search(sdk_root, runtime_dir)
+    EASYID_SDK_ROOT = sdk_root
+    EASYID_RUNTIME_DIR = runtime_dir
     EASYID = WinDLL(str(lib_path))
+    initialize_runtime()
 elif os_name == 'Linux':
         EASYID = CDLL("../../../lib/libEasyID.so")
 else:
@@ -376,6 +450,15 @@ EidDeviceList._fields_ = [
     ("reserved",c_char * 64)                              # ///< @~chinese 预留位          @~english Reserved
 ]
 
+# Alternate layout: fixed-size device array (some SDK builds use inline storage).
+class EidDeviceListInline(Structure):
+    pass
+EidDeviceListInline._fields_ = [
+    ("num", c_uint32),
+    ("infos", EidDeviceInfo * MAX_DEVICE_NUM),
+    ("reserved", c_char * 64),
+]
+
 # /// @~chinese
 # /// @brief 错误列表
 # /// @~english
@@ -532,23 +615,30 @@ class Camera():
         return EASYID.eidGetVersion()
 
     @staticmethod
-    def eidEnumDevices(deviceList: EidDeviceList, type: int) -> int:
-        EASYID.eidEnumDevices.argtypes = (POINTER(EidDeviceList), c_uint32)
+    def eidEnumDevices(deviceList, type: int) -> int:
+        EASYID.eidEnumDevices.argtypes = (c_void_p, c_uint32)
         EASYID.eidEnumDevices.restype = c_int
         # C原型:EASYID_API int EASYID_CALL eidEnumDevices(EidDeviceList* deviceList, uint32_t type);
         return EASYID.eidEnumDevices(byref(deviceList), c_uint32(type))
 
     def eidCreateDevice(self, data: str, type: int) -> int:
-        # Match official SDK Python binding: returns camera handle pointer.
-        EASYID.eidCreateDevice.argtypes = (c_char_p, c_int)
-        EASYID.eidCreateDevice.restype = POINTER(c_void_p)
         # C原型:EASYID_API EidCamera EASYID_CALL eidCreateDevice(const char* data, EidDeviceDataType type);
-        # With argtypes=(c_char_p, ...), pass bytes (str is rejected on some Python builds).
         payload = data.encode("ascii") if isinstance(data, str) else data
-        self.handle = EASYID.eidCreateDevice(payload, c_int(type))
-        if not self.handle:
-            return EidError.eidErrorInvalidParameter
-        return EidError.eidErrorOK
+        EASYID.eidCreateDevice.argtypes = (c_char_p, c_int)
+
+        # Try POINTER(c_void_p) (official Python sample) then c_void_p (direct handle value).
+        for restype in (POINTER(c_void_p), c_void_p):
+            EASYID.eidCreateDevice.restype = restype
+            result = EASYID.eidCreateDevice(payload, c_int(type))
+            if not result:
+                continue
+            if restype is POINTER(c_void_p):
+                self.handle = result
+            else:
+                self.handle = result if isinstance(result, c_void_p) else c_void_p(result)
+            return EidError.eidErrorOK
+        self.handle = c_void_p()
+        return EidError.eidErrorInvalidParameter
 
     def eidReleaseFrame(self) -> None:
         EASYID.eidReleaseHandle.argtypes = c_void_p
