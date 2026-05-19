@@ -97,6 +97,15 @@ def parse_discovery_ack(packet: bytes) -> dict[str, Any] | None:
     }
 
 
+def _is_discovery_bind_ip(ip: str) -> bool:
+    """Return True if the address can be bound for GVCP discovery."""
+    try:
+        addr = ipaddress.IPv4Address(ip)
+    except ValueError:
+        return False
+    return not (addr.is_loopback or addr.is_link_local or addr.is_unspecified)
+
+
 def _broadcast_from_ip_mask(ip: str, mask: str) -> str | None:
     try:
         interface = ipaddress.IPv4Interface(f"{ip}/{mask}")
@@ -135,7 +144,7 @@ def _iter_host_interfaces_unix() -> list[HostInterface]:
         if not match:
             continue
         name, ip, prefix = match.groups()
-        if ip.startswith("127."):
+        if not _is_discovery_bind_ip(ip):
             continue
         try:
             network = ipaddress.IPv4Network(f"{ip}/{prefix}", strict=False)
@@ -161,10 +170,14 @@ def _windows_console_encoding() -> str:
 def _iter_host_interfaces_windows_powershell() -> list[HostInterface]:
     script = (
         "Get-NetIPAddress -AddressFamily IPv4 | "
-        "Where-Object { $_.IPAddress -notlike '127.*' } | "
-        "ForEach-Object { "
+        "Where-Object { "
+        "$_.IPAddress -notlike '127.*' -and $_.IPAddress -notlike '169.254.*' "
+        "} | ForEach-Object { "
+        "$nic = Get-NetIPInterface -InterfaceIndex $_.InterfaceIndex "
+        "-AddressFamily IPv4 -ErrorAction SilentlyContinue; "
+        "if ($nic -and $nic.ConnectionState -eq 'Connected') { "
         "$_.InterfaceAlias + '|' + $_.IPAddress + '|' + $_.PrefixLength "
-        "}"
+        "} }"
     )
     try:
         proc = subprocess.run(
@@ -188,7 +201,7 @@ def _iter_host_interfaces_windows_powershell() -> list[HostInterface]:
         if len(parts) != 3:
             continue
         name, ip, prefix_raw = parts
-        if not name or ip.startswith("127."):
+        if not name or not _is_discovery_bind_ip(ip):
             continue
         try:
             prefix = int(prefix_raw)
@@ -252,7 +265,7 @@ def _iter_host_interfaces_windows_ipconfig() -> list[HostInterface]:
 
     def flush() -> None:
         nonlocal current_name, current_ip, current_mask
-        if not current_name or not current_ip or current_ip.startswith("127."):
+        if not current_name or not current_ip or not _is_discovery_bind_ip(current_ip):
             current_ip = ""
             current_mask = ""
             return
@@ -299,6 +312,8 @@ def _discovery_targets() -> list[tuple[str | None, str, str]]:
     seen: set[tuple[str | None, str]] = set()
 
     for host_if in _iter_host_interfaces():
+        if not _is_discovery_bind_ip(host_if.ip):
+            continue
         key = (host_if.ip, host_if.broadcast)
         if key in seen:
             continue
@@ -313,16 +328,19 @@ def _discovery_targets() -> list[tuple[str | None, str, str]]:
 def discover_gige_devices(timeout_s: float = DEFAULT_DISCOVERY_TIMEOUT_S) -> list[dict[str, Any]]:
     packet = build_discovery_command()
     devices_by_mac: dict[str, dict[str, Any]] = {}
-    per_socket_timeout = max(timeout_s / max(len(_discovery_targets()), 1), 0.2)
+    targets = _discovery_targets()
+    per_socket_timeout = max(timeout_s / max(len(targets), 1), 0.2)
 
-    for bind_ip, destination, interface_name in _discovery_targets():
-        print(bind_ip, destination, interface_name, "discover_gige_devices")
+    for bind_ip, destination, interface_name in targets:
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         try:
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
             if bind_ip:
-                sock.bind((bind_ip, 0))
+                try:
+                    sock.bind((bind_ip, 0))
+                except OSError:
+                    continue
             else:
                 sock.bind(("", 0))
             sock.settimeout(per_socket_timeout)
