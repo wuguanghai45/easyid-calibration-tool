@@ -55,13 +55,44 @@ class GvcpDevice:
                 if chunks:
                     break
                 raise
+            if len(part) == 0:
+                break
             if len(part) < current:
                 # Some devices cap per-read length; stop on short read to avoid endless retries.
                 chunks.append(part)
                 break
             chunks.append(part)
-            offset += current
-            remaining -= current
+            step = len(part)
+            offset += step
+            remaining -= step
+        return b"".join(chunks)[:size]
+
+    def read_memory_fixed_base(self, address: int, size: int, chunk_size: int = 512) -> bytes:
+        """Read memory using a fixed base address repeatedly.
+
+        Some devices expose local XML data through a FIFO-like window where the
+        address is constant and each READMEM returns the next chunk.
+        """
+        if size <= 0:
+            return b""
+        if chunk_size <= 0:
+            chunk_size = 512
+        chunks: list[bytes] = []
+        remaining = size
+        last_chunk: bytes | None = None
+        while remaining > 0:
+            current = min(remaining, chunk_size)
+            try:
+                part = self.read_memory(address, current)
+            except Exception:
+                break
+            if not part:
+                break
+            if last_chunk is not None and part == last_chunk:
+                break
+            chunks.append(part)
+            last_chunk = part
+            remaining -= len(part)
         return b"".join(chunks)[:size]
 
     def write_memory(self, address: int, data: bytes) -> None:

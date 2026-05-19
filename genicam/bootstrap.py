@@ -44,6 +44,10 @@ def _fetch_single_url(device: GvcpDevice, url: str) -> str:
         address = _parse_hex_or_prefixed_int(addr_hex)
         size = _parse_hex_or_prefixed_int(size_hex)
         payload = device.read_memory_chunked(address, size, chunk_size=0x200)
+        if len(payload) < min(size, 2048):
+            alt = device.read_memory_fixed_base(address, size, chunk_size=0x200)
+            if len(alt) > len(payload):
+                payload = alt
         if filename.lower().endswith(".zip") or b"PK\x03\x04" in payload[:32]:
             try:
                 return _decode_xml_from_zip(payload)
