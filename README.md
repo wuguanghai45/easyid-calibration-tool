@@ -8,7 +8,7 @@
 
 1. 通过 **IMV SDK** 枚举并连接指定设备（序列号或 IP）
 2. 保存 `device_info.json`（型号、SN、IP、MAC 等）
-3. 导出 `software_config.xml`（`IMV_SaveDeviceCfg`）与 `hardware_config.mvcfg`（硬件 UserSet 快照）
+3. 读取并 `UserSetLoad` 当前配置组，再切换目标 UserSet 导出 `software_config.xml` / `hardware_config.xml`（见 `userset_info.json`）
 4. 软触发采集一帧，保存图像与 `scan_result.json`（解码状态、条码内容等）
 
 可选：`--dump-features` 导出可读 GenICam 特征摘要，用于调试不同机型的特征名差异。
@@ -118,7 +118,8 @@ python read_scanner_calibration.py --ip 192.168.1.100 --interface "192.168.1"
 <序列号或IP>_<YYYYMMDD_HHMMSS>/
 ├── device_info.json
 ├── software_config.xml
-├── hardware_config.mvcfg
+├── hardware_config.xml
+├── userset_info.json           # 导出前后 UserSetSelector
 ├── scan_image.jpg          # 或 .png / .raw
 ├── scan_result.json
 └── feature_dump.json       # 仅 --dump-features

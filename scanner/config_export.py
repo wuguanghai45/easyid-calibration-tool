@@ -6,18 +6,23 @@ import logging
 import shutil
 import zipfile
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from imv_sdk.IMVDefines import IMV_OK
 
-from scanner.feature import try_first_command, try_first_enum
+from scanner.feature import (
+    get_active_userset,
+    load_userset,
+    try_first_command,
+    try_first_enum,
+)
 from scanner_config import (
     HARDWARE_USERSET_SYMBOLS,
     SOFTWARE_USERSET_SYMBOLS,
     USERSET_LOAD_COMMANDS,
     USERSET_SELECTOR_FEATURES,
 )
-from scanner_utils import ScannerProtocolError
+from scanner_utils import ScannerProtocolError, write_json
 
 if TYPE_CHECKING:
     from imv_sdk.IMVApi import MvCamera
@@ -27,13 +32,44 @@ logger = logging.getLogger(__name__)
 ZIP_MAGIC = b"PK\x03\x04"
 
 
-def _activate_userset(cam: MvCamera, symbols: tuple[str, ...]) -> str:
+def _activate_userset(cam: MvCamera, symbols: tuple[str, ...]) -> dict[str, Any]:
+    """Select a UserSet symbol, load it, and read back the active selection."""
     for feature in USERSET_SELECTOR_FEATURES:
         selected = try_first_enum(cam, feature, symbols)
-        if selected:
-            try_first_command(cam, USERSET_LOAD_COMMANDS)
-            return selected
-    return symbols[0]
+        if not selected:
+            continue
+        if not try_first_command(cam, USERSET_LOAD_COMMANDS):
+            logger.warning("UserSetLoad failed after selecting %s on %s", selected, feature)
+        active = get_active_userset(cam, USERSET_SELECTOR_FEATURES)
+        return {
+            "selector_feature": feature,
+            "requested_symbol": selected,
+            "active_symbol": active.get("symbol"),
+        }
+
+    active = get_active_userset(cam, USERSET_SELECTOR_FEATURES)
+    return {
+        "selector_feature": active.get("selector_feature"),
+        "requested_symbol": None,
+        "active_symbol": active.get("symbol"),
+    }
+
+
+def _sync_active_userset(cam: MvCamera) -> dict[str, Any]:
+    """Read current UserSetSelector and load that group before exporting."""
+    active = get_active_userset(cam, USERSET_SELECTOR_FEATURES)
+    if not active.get("symbol"):
+        logger.warning("Cannot read UserSetSelector; exporting without explicit UserSetLoad.")
+        return active
+
+    logger.info(
+        "Current UserSet: %s=%s, loading before export",
+        active.get("selector_feature"),
+        active.get("symbol"),
+    )
+    if not load_userset(cam, USERSET_LOAD_COMMANDS):
+        logger.warning("UserSetLoad failed for active UserSet %s", active.get("symbol"))
+    return active
 
 
 def _is_xml_bytes(data: bytes) -> bool:
@@ -91,9 +127,8 @@ def _save_device_cfg_as_xml(cam: MvCamera, xml_path: Path) -> None:
     if temp_path.exists():
         temp_path.unlink()
 
-    # Some models accept .xml extension directly.
-    ret = cam.IMV_SaveDeviceCfg(str(xml_path.with_suffix(".xml.tmp")))
     direct_tmp = xml_path.with_suffix(".xml.tmp")
+    ret = cam.IMV_SaveDeviceCfg(str(direct_tmp))
     if ret == IMV_OK and direct_tmp.is_file() and direct_tmp.stat().st_size > 0:
         try:
             _promote_to_xml(direct_tmp, xml_path)
@@ -117,24 +152,61 @@ def _save_device_cfg_as_xml(cam: MvCamera, xml_path: Path) -> None:
 
 def export_device_configs(cam: MvCamera, output_dir: Path) -> dict[str, str]:
     """
-    Export software/hardware UserSet snapshots.
+    Export software/hardware UserSet snapshots as XML.
 
-    - software_config.xml: IMV_SaveDeviceCfg after software UserSet load (XML or ZIP→XML)
-    - hardware_config.mvcfg: IMV_SaveDeviceCfg binary vendor format
+    Flow:
+    1. Read and load the currently active UserSet (UserSetSelector + UserSetLoad)
+    2. Switch to target UserSet, load again, verify active symbol, then IMV_SaveDeviceCfg → XML
     """
     output_dir.mkdir(parents=True, exist_ok=True)
     outputs: dict[str, str] = {}
 
+    active_before = _sync_active_userset(cam)
+    userset_info: dict[str, Any] = {"active_before_export": active_before, "exports": []}
+
     software_path = output_dir / "software_config.xml"
-    software_symbol = _activate_userset(cam, SOFTWARE_USERSET_SYMBOLS)
-    logger.info("Saving software UserSet (symbol=%s) to XML via IMV_SaveDeviceCfg", software_symbol)
+    software_activation = _activate_userset(cam, SOFTWARE_USERSET_SYMBOLS)
+    software_active = get_active_userset(cam, USERSET_SELECTOR_FEATURES)
+    logger.info(
+        "Software export: requested=%s active=%s",
+        software_activation.get("requested_symbol"),
+        software_active.get("symbol"),
+    )
+    if software_active.get("symbol"):
+        load_userset(cam, USERSET_LOAD_COMMANDS)
     _save_device_cfg_as_xml(cam, software_path)
     outputs["software_config"] = str(software_path)
+    userset_info["exports"].append(
+        {
+            "target": "software",
+            "activation": software_activation,
+            "active_before_save": software_active,
+        }
+    )
 
-    hardware_path = output_dir / "hardware_config.mvcfg"
-    hardware_symbol = _activate_userset(cam, HARDWARE_USERSET_SYMBOLS)
-    logger.info("Saving hardware UserSet (symbol=%s) via IMV_SaveDeviceCfg", hardware_symbol)
-    _save_device_cfg(cam, hardware_path)
+    hardware_path = output_dir / "hardware_config.xml"
+    hardware_activation = _activate_userset(cam, HARDWARE_USERSET_SYMBOLS)
+    hardware_active = get_active_userset(cam, USERSET_SELECTOR_FEATURES)
+    logger.info(
+        "Hardware export: requested=%s active=%s",
+        hardware_activation.get("requested_symbol"),
+        hardware_active.get("symbol"),
+    )
+    if hardware_active.get("symbol"):
+        load_userset(cam, USERSET_LOAD_COMMANDS)
+    _save_device_cfg_as_xml(cam, hardware_path)
     outputs["hardware_config"] = str(hardware_path)
+    userset_info["exports"].append(
+        {
+            "target": "hardware",
+            "activation": hardware_activation,
+            "active_before_save": hardware_active,
+        }
+    )
+
+    active_after = get_active_userset(cam, USERSET_SELECTOR_FEATURES)
+    userset_info["active_after_export"] = active_after
+    write_json(output_dir / "userset_info.json", userset_info)
+    outputs["userset_info"] = str(output_dir / "userset_info.json")
 
     return outputs
