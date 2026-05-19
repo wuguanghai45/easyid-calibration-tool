@@ -30,7 +30,13 @@
 easyid-calibration-tool/Runtime/x64/MVSDKmd.dll
 ```
 
-仓库已按此布局放置主库；若启动报缺少依赖 DLL，请把安装包内 **整个** `Runtime/x64` 目录一并复制过来。
+主库 `MVSDKmd.dll` 还需同目录下的 `GenApi_MD_VC120_v3_0.dll`、`ImageConvert.dll` 等约 10 个依赖 DLL（见 [`Runtime/x64/README.md`](Runtime/x64/README.md)）。请从安装包复制 **整个** `Runtime/x64` 目录。
+
+在 Windows 上可先运行诊断：
+
+```bat
+python scripts\check_mvsdk_runtime.py
+```
 
 也可设置环境变量 `IMV_SDK_LIB` 指向 `MVSDKmd.dll` 的绝对路径（优先级更高）。
 
