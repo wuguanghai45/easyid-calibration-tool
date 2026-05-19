@@ -543,10 +543,8 @@ class Camera():
         EASYID.eidCreateDevice.argtypes = (c_char_p, c_int)
         EASYID.eidCreateDevice.restype = POINTER(c_void_p)
         # C原型:EASYID_API EidCamera EASYID_CALL eidCreateDevice(const char* data, EidDeviceDataType type);
-        if isinstance(data, str):
-            payload: str | bytes = data
-        else:
-            payload = data
+        # With argtypes=(c_char_p, ...), pass bytes (str is rejected on some Python builds).
+        payload = data.encode("ascii") if isinstance(data, str) else data
         self.handle = EASYID.eidCreateDevice(payload, c_int(type))
         if not self.handle:
             return EidError.eidErrorInvalidParameter
