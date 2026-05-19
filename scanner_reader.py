@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+import logging
+from ctypes import POINTER, cast
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import EasyID
+
+logger = logging.getLogger(__name__)
+MAX_DEVICE_NUM = getattr(EasyID, "MAX_DEVICE_NUM", 256)
 
 from scanner_config import (
     DEFAULT_BUFFER_COUNT,
@@ -24,6 +29,8 @@ from scanner_config import (
 )
 from gvcp_discovery import discover_gige_devices
 from scanner_utils import (
+    ERROR_CODE_NAMES,
+    EasyIDOperationError,
     check_ret,
     copy_image_bytes,
     decode_cstr,
@@ -107,12 +114,22 @@ class ScannerReader:
             ip=ip,
             interface_name=interface_name,
         )
-        sdk_device = self.find_sdk_device(
+        # SDK must enumerate devices before eidCreateDevice on many runtime builds.
+        sdk_devices = self.enum_sdk_devices()
+        sdk_device = self._match_sdk_device(
+            sdk_devices,
             gvcp_matched=matched,
             serial_number=serial_number,
             ip=ip,
             interface_name=interface_name,
         )
+        if not sdk_devices:
+            logger.warning(
+                "SDK eidEnumDevices returned no devices (GVCP discovery still found %s). "
+                "Check EASYID_RUNENV_64, GigE drivers, and use SDK-bundled EasyID.py.",
+                matched.get("ip_address") or matched.get("serial_number"),
+            )
+
         create_attempts = self._build_create_device_attempts(
             gvcp_matched=matched,
             sdk_device=sdk_device,
@@ -121,10 +138,20 @@ class ScannerReader:
         )
         last_ret = EasyID.EidError.eidErrorInvalidParameter
         for create_data, create_type in create_attempts:
+            type_name = self._device_data_type_name(create_type)
+            logger.info("eidCreateDevice: data=%r type=%s", create_data, type_name)
             last_ret = self.camera.eidCreateDevice(create_data, create_type)
             if last_ret == EasyID.EidError.eidErrorOK:
                 break
-        check_ret(last_ret, "eidCreateDevice")
+        if last_ret != EasyID.EidError.eidErrorOK:
+            hint = (
+                f"SDK enum count={len(sdk_devices)}. "
+                "Try --sn <serial> if --ip fails, and copy EasyID.py from "
+                "Development\\Samples\\Python\\EasyID in the SDK install folder."
+            )
+            raise EasyIDOperationError(
+                f"eidCreateDevice failed: {ERROR_CODE_NAMES.get(last_ret, 'unknown')} ({last_ret}). {hint}"
+            )
         check_ret(self.camera.eidOpenDevice(), "eidOpenDevice")
         self.connected = True
 
@@ -213,36 +240,51 @@ class ScannerReader:
 
     def enum_sdk_devices(self) -> list[dict[str, Any]]:
         devices: list[dict[str, Any]] = []
-        for interface_type in (
+        seen: set[str] = set()
+        interface_types = (
             EasyID.EidInterfaceType.eidInterfaceTypeGige,
+            0,
             EasyID.EidInterfaceType.eidInterfaceTypeAll,
-        ):
-            device_list = EasyID.EidDeviceList()
-            ret = EasyID.Camera.eidEnumDevices(device_list, interface_type)
-            if ret != EasyID.EidError.eidErrorOK:
-                continue
-            for idx in range(device_list.num):
-                devices.append(self.device_info_to_dict(device_list.infos[idx]))
-            if devices:
-                break
+        )
+        for interface_type in interface_types:
+            for preallocate in (True, False):
+                device_list = EasyID.EidDeviceList()
+                backing = None
+                if preallocate:
+                    backing = (EasyID.EidDeviceInfo * MAX_DEVICE_NUM)()
+                    device_list.infos = cast(backing, POINTER(EasyID.EidDeviceInfo))
+
+                ret = EasyID.Camera.eidEnumDevices(device_list, interface_type)
+                if ret != EasyID.EidError.eidErrorOK:
+                    continue
+                if not device_list.infos:
+                    continue
+
+                count = min(int(device_list.num), MAX_DEVICE_NUM)
+                for idx in range(count):
+                    dev = self.device_info_to_dict(device_list.infos[idx])
+                    key = dev.get("serial_number") or dev.get("ip_address") or dev.get("device_id")
+                    if not key or key in seen:
+                        continue
+                    seen.add(key)
+                    devices.append(dev)
+                if devices:
+                    return devices
         return devices
 
     @staticmethod
     def _normalize_mac(mac: str) -> str:
         return "".join(ch for ch in mac if ch.isalnum()).lower()
 
-    def find_sdk_device(
+    def _match_sdk_device(
         self,
+        sdk_devices: list[dict[str, Any]],
         *,
         gvcp_matched: dict[str, Any],
         serial_number: str | None,
         ip: str | None,
         interface_name: str | None,
     ) -> dict[str, Any] | None:
-        try:
-            sdk_devices = self.enum_sdk_devices()
-        except Exception:
-            return None
         if not sdk_devices:
             return None
 
@@ -295,23 +337,44 @@ class ScannerReader:
             seen.add(key)
             attempts.append(key)
 
-        # User-specified identifiers first (SDK manual default is serial number; IP is common for --ip).
-        if ip:
-            add(ip, EasyID.EidDeviceDataType.eidDeviceDataTypeIP)
+        def add_mac(value: str | None) -> None:
+            normalized = (value or "").strip()
+            if not normalized:
+                return
+            add(normalized, EasyID.EidDeviceDataType.eidDeviceDataTypeMAC)
+            add(normalized.replace(":", ""), EasyID.EidDeviceDataType.eidDeviceDataTypeMAC)
+            add(normalized.replace(":", "").upper(), EasyID.EidDeviceDataType.eidDeviceDataTypeMAC)
+
+        # SDK manual default identifier is serial number; prefer SDK-matched fields first.
+        if sdk_device:
+            add(sdk_device.get("serial_number"), EasyID.EidDeviceDataType.eidDeviceDataTypeSN)
+            add(sdk_device.get("device_id"), EasyID.EidDeviceDataType.eidDeviceDataTypeID)
+            add(sdk_device.get("ip_address"), EasyID.EidDeviceDataType.eidDeviceDataTypeIP)
+            add_mac(sdk_device.get("mac_address"))
+
         if serial_number:
             add(serial_number, EasyID.EidDeviceDataType.eidDeviceDataTypeSN)
+        if ip:
+            add(ip, EasyID.EidDeviceDataType.eidDeviceDataTypeIP)
 
-        for source in (sdk_device, gvcp_matched):
-            if not source:
-                continue
-            add(source.get("serial_number"), EasyID.EidDeviceDataType.eidDeviceDataTypeSN)
-            add(source.get("ip_address"), EasyID.EidDeviceDataType.eidDeviceDataTypeIP)
-            add(source.get("mac_address"), EasyID.EidDeviceDataType.eidDeviceDataTypeMAC)
-            add(source.get("device_id"), EasyID.EidDeviceDataType.eidDeviceDataTypeID)
+        add(gvcp_matched.get("serial_number"), EasyID.EidDeviceDataType.eidDeviceDataTypeSN)
+        add(gvcp_matched.get("ip_address"), EasyID.EidDeviceDataType.eidDeviceDataTypeIP)
+        add_mac(gvcp_matched.get("mac_address"))
+        add(gvcp_matched.get("device_id"), EasyID.EidDeviceDataType.eidDeviceDataTypeID)
 
         if not attempts:
             raise RuntimeError("Matched device has no usable identifier (device_id/sn/ip/mac).")
         return attempts
+
+    @staticmethod
+    def _device_data_type_name(data_type: int) -> str:
+        mapping = {
+            EasyID.EidDeviceDataType.eidDeviceDataTypeID: "ID",
+            EasyID.EidDeviceDataType.eidDeviceDataTypeSN: "SN",
+            EasyID.EidDeviceDataType.eidDeviceDataTypeIP: "IP",
+            EasyID.EidDeviceDataType.eidDeviceDataTypeMAC: "MAC",
+        }
+        return mapping.get(data_type, str(data_type))
 
     @staticmethod
     def device_info_to_dict(info: EasyID.EidDeviceInfo) -> dict[str, Any]:

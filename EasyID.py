@@ -6,28 +6,74 @@ import sys
 import os
 import platform
 from enum import Enum
+from pathlib import Path
+
+MAX_DEVICE_NUM = 256
 
 # 加载SDK动态库
 # load SDK library
 os_name = platform.system()
 bits, linkage= platform.architecture()
+
+
+def _resolve_easyid_runtime_dir(env_path: str, is_64bit: bool) -> tuple[Path, Path]:
+    base = Path(env_path).expanduser()
+    runtime_name = "x64" if is_64bit else "Win32"
+    if base.name.lower() in ("x64", "win32"):
+        return base.parent.parent, base
+    if (base / "EasyID.dll").is_file():
+        return base.parent, base
+    runtime_dir = base / "Runtime" / runtime_name
+    if runtime_dir.is_file() or (runtime_dir / "EasyID.dll").is_file():
+        return base, runtime_dir
+    return base.parent, base
+
+
+def _configure_windows_dll_search(sdk_root: Path, runtime_dir: Path) -> None:
+    candidates: list[Path] = []
+    if runtime_dir.is_dir():
+        candidates.append(runtime_dir)
+    for sub in ("x64", "Win32"):
+        path = sdk_root / "Runtime" / sub
+        if path.is_dir():
+            candidates.append(path)
+    drivers = sdk_root / "Drivers"
+    if drivers.is_dir():
+        for dll_dir in drivers.rglob("*"):
+            if dll_dir.is_dir() and any(dll_dir.glob("*.dll")):
+                candidates.append(dll_dir)
+
+    added: list[str] = []
+    seen: set[str] = set()
+    for directory in candidates:
+        key = str(directory.resolve())
+        if key in seen:
+            continue
+        seen.add(key)
+        added.append(key)
+        if hasattr(os, "add_dll_directory"):
+            try:
+                os.add_dll_directory(key)
+            except OSError:
+                pass
+    if added:
+        os.environ["PATH"] = os.pathsep.join(added) + os.pathsep + os.environ.get("PATH", "")
+
+
 if os_name == 'Windows':
-    if bits == '64bit':
-        EASYID_RUNENV = "EASYID_RUNENV_64"
-        env_path = os.environ.get(EASYID_RUNENV)
-        if env_path == None:
-            print("Please set the environment variable EASYID_RUNENV_64 to the EasyID installation path")
-            sys.exit()
-        lib_path = os.path.join(env_path, "EasyID.dll")
-        EASYID = WinDLL(lib_path)
-    else:
-        EASYID_RUNENV = "EASYID_RUNENV_32"
-        env_path = os.environ[EASYID_RUNENV]
-        if env_path == None:
-            print("Please set the environment variable EASYID_RUNENV_32 to the EasyID installation path")
-            sys.exit()
-        lib_path = os.path.join(env_path, "EasyID.dll")
-        EASYID = WinDLL(lib_path)
+    is_64bit = bits == '64bit'
+    EASYID_RUNENV = "EASYID_RUNENV_64" if is_64bit else "EASYID_RUNENV_32"
+    env_path = os.environ.get(EASYID_RUNENV)
+    if env_path is None:
+        print(f"Please set the environment variable {EASYID_RUNENV} to the EasyID installation path")
+        sys.exit()
+    sdk_root, runtime_dir = _resolve_easyid_runtime_dir(env_path, is_64bit)
+    lib_path = runtime_dir / "EasyID.dll"
+    if not lib_path.is_file():
+        print(f"EasyID.dll not found: {lib_path}")
+        sys.exit()
+    _configure_windows_dll_search(sdk_root, runtime_dir)
+    EASYID = WinDLL(str(lib_path))
 elif os_name == 'Linux':
         EASYID = CDLL("../../../lib/libEasyID.so")
 else:
@@ -493,10 +539,14 @@ class Camera():
         return EASYID.eidEnumDevices(byref(deviceList), c_uint32(type))
 
     def eidCreateDevice(self, data: str, type: int) -> int:
+        # Match official SDK Python binding: returns camera handle pointer.
         EASYID.eidCreateDevice.argtypes = (c_char_p, c_int)
-        EASYID.eidCreateDevice.restype = c_void_p
+        EASYID.eidCreateDevice.restype = POINTER(c_void_p)
         # C原型:EASYID_API EidCamera EASYID_CALL eidCreateDevice(const char* data, EidDeviceDataType type);
-        payload = data.encode("ascii") if isinstance(data, str) else data
+        if isinstance(data, str):
+            payload: str | bytes = data
+        else:
+            payload = data
         self.handle = EASYID.eidCreateDevice(payload, c_int(type))
         if not self.handle:
             return EidError.eidErrorInvalidParameter
