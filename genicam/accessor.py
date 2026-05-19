@@ -27,7 +27,11 @@ class GenicamAccessor:
     def __init__(self, device: GvcpDevice, xml_text: str) -> None:
         self.device = device
         self.xml_text = _normalize_xml_text(xml_text)
-        self._root = ET.fromstring(self.xml_text)
+        try:
+            self._root = ET.fromstring(self.xml_text)
+        except ET.ParseError as exc:
+            preview = repr(self.xml_text[:120])
+            raise ET.ParseError(f"{exc}; xml_head={preview}") from exc
         self._registers = self._load_registers()
 
     def _load_registers(self) -> dict[str, RegisterNode]:
@@ -145,6 +149,12 @@ def _normalize_xml_text(xml_text: str) -> str:
     for end_tag in ("</RegisterDescription>", "</RegisterDescriptionModel>", "</Docu>"):
         end = text.find(end_tag)
         if end >= 0:
-            return text[: end + len(end_tag)]
-    return text
+            text = text[: end + len(end_tag)]
+            break
+
+    # Remove illegal control chars that occasionally appear in padded payloads.
+    cleaned = "".join(
+        ch for ch in text if (ord(ch) >= 32 or ch in "\t\r\n")
+    )
+    return cleaned
 

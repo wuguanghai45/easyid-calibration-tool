@@ -86,12 +86,14 @@ def _parse_hex_or_prefixed_int(value: str) -> int:
 
 def _decode_xml_text(payload: bytes) -> str:
     body = _extract_xml_bytes(payload)
-    for encoding in ("utf-8", "utf-16-le", "gbk", "latin-1"):
+    for encoding in ("utf-8-sig", "utf-8", "utf-16-le", "utf-16-be", "gbk"):
         try:
-            return body.decode(encoding)
+            text = body.decode(encoding)
+            if _looks_like_xml_text(text):
+                return text
         except Exception:
             continue
-    return body.decode("utf-8", errors="replace")
+    raise RuntimeError("Unable to decode valid GenICam XML text from payload")
 
 
 def _decode_xml_from_zip(payload: bytes) -> str:
@@ -120,8 +122,8 @@ def _extract_xml_bytes(payload: bytes) -> bytes:
             if start >= 0:
                 break
     if start < 0:
-        # Keep previous behavior for unknown payload.
-        return payload.split(b"\x00", 1)[0]
+        # Keep as-is; caller will attempt multi-encoding decode and validation.
+        return payload
 
     xml_part = payload[start:]
     # Try to cut at common closing tags to remove trailing binary tail.
@@ -130,4 +132,19 @@ def _extract_xml_bytes(payload: bytes) -> bytes:
         if end >= 0:
             return xml_part[: end + len(end_marker)]
     return xml_part
+
+
+def _looks_like_xml_text(text: str) -> bool:
+    if not text:
+        return False
+    candidate = text.lstrip("\ufeff\x00 \t\r\n")
+    if not candidate:
+        return False
+    if not candidate.startswith("<"):
+        return False
+    return (
+        "<?xml" in candidate[:200]
+        or "<RegisterDescription" in candidate[:400]
+        or "<RegisterDescriptionModel" in candidate[:400]
+    )
 
