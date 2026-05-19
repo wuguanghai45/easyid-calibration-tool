@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from scanner.capture import capture_soft_trigger_frame
-from scanner.config_export import export_userset_xml
+from scanner.config_export import export_device_configs
 from scanner.device import close_camera, enum_devices, find_device, open_camera
 from scanner.feature_dump import dump_readable_features
 from scanner_config import DEFAULT_BUFFER_COUNT, DEFAULT_FRAME_TIMEOUT_MS
@@ -86,7 +86,7 @@ class ScannerReader:
     def export_configs(self, output_dir: Path) -> dict[str, str]:
         self._ensure_connected()
         assert self.cam is not None
-        return export_userset_xml(self.cam, output_dir)
+        return export_device_configs(self.cam, output_dir)
 
     def capture_scan(self, output_dir: Path, options: CaptureOptions) -> dict[str, Any]:
         self._ensure_connected()
