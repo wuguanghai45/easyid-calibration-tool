@@ -107,11 +107,21 @@ class ScannerReader:
             ip=ip,
             interface_name=interface_name,
         )
-        create_data, create_type = self._resolve_create_device_params(
-            matched,
+        sdk_device = self.find_sdk_device(
+            gvcp_matched=matched,
             serial_number=serial_number,
             ip=ip,
+            interface_name=interface_name,
         )
+        if sdk_device and sdk_device.get("device_id"):
+            create_data = sdk_device["device_id"]
+            create_type = EasyID.EidDeviceDataType.eidDeviceDataTypeID
+        else:
+            create_data, create_type = self._resolve_create_device_params(
+                matched,
+                serial_number=serial_number,
+                ip=ip,
+            )
 
         check_ret(
             self.camera.eidCreateDevice(
@@ -206,6 +216,67 @@ class ScannerReader:
             except Exception:
                 pass
 
+    def enum_sdk_devices(self) -> list[dict[str, Any]]:
+        devices: list[dict[str, Any]] = []
+        for interface_type in (
+            EasyID.EidInterfaceType.eidInterfaceTypeGige,
+            EasyID.EidInterfaceType.eidInterfaceTypeAll,
+        ):
+            device_list = EasyID.EidDeviceList()
+            ret = EasyID.Camera.eidEnumDevices(device_list, interface_type)
+            if ret != EasyID.EidError.eidErrorOK:
+                continue
+            for idx in range(device_list.num):
+                devices.append(self.device_info_to_dict(device_list.infos[idx]))
+            if devices:
+                break
+        return devices
+
+    @staticmethod
+    def _normalize_mac(mac: str) -> str:
+        return "".join(ch for ch in mac if ch.isalnum()).lower()
+
+    def find_sdk_device(
+        self,
+        *,
+        gvcp_matched: dict[str, Any],
+        serial_number: str | None,
+        ip: str | None,
+        interface_name: str | None,
+    ) -> dict[str, Any] | None:
+        try:
+            sdk_devices = self.enum_sdk_devices()
+        except Exception:
+            return None
+        if not sdk_devices:
+            return None
+
+        target_sn = serial_number or gvcp_matched.get("serial_number") or ""
+        target_ip = ip or gvcp_matched.get("ip_address") or ""
+        target_mac = gvcp_matched.get("mac_address") or ""
+        normalized_mac = self._normalize_mac(target_mac)
+
+        matched_devices: list[dict[str, Any]] = []
+        for dev in sdk_devices:
+            if target_sn and dev.get("serial_number") == target_sn:
+                matched_devices.append(dev)
+            elif target_ip and dev.get("ip_address") == target_ip:
+                matched_devices.append(dev)
+            elif normalized_mac and self._normalize_mac(dev.get("mac_address", "")) == normalized_mac:
+                matched_devices.append(dev)
+
+        if interface_name:
+            needle = interface_name.casefold()
+            matched_devices = [
+                dev
+                for dev in matched_devices
+                if needle in str(dev.get("interface_name", "")).casefold()
+            ]
+
+        if not matched_devices:
+            return None
+        return matched_devices[0]
+
     @staticmethod
     def _resolve_create_device_params(
         matched: dict[str, Any],
@@ -213,15 +284,20 @@ class ScannerReader:
         serial_number: str | None,
         ip: str | None,
     ) -> tuple[str, int]:
+        if serial_number:
+            return serial_number, EasyID.EidDeviceDataType.eidDeviceDataTypeSN
+        if ip:
+            return ip, EasyID.EidDeviceDataType.eidDeviceDataTypeIP
+
         device_id = matched.get("device_id") or ""
         if device_id:
             return device_id, EasyID.EidDeviceDataType.eidDeviceDataTypeID
 
-        target_sn = serial_number or matched.get("serial_number") or ""
+        target_sn = matched.get("serial_number") or ""
         if target_sn:
             return target_sn, EasyID.EidDeviceDataType.eidDeviceDataTypeSN
 
-        target_ip = ip or matched.get("ip_address") or ""
+        target_ip = matched.get("ip_address") or ""
         if target_ip:
             return target_ip, EasyID.EidDeviceDataType.eidDeviceDataTypeIP
 
