@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import io
 import re
 import urllib.request
+import zipfile
 from dataclasses import dataclass
 
 from gvcp.device import GvcpDevice
@@ -15,7 +17,7 @@ class GenicamXml:
     xml_text: str
 
 
-LOCAL_URL_PATTERN = re.compile(r"^local:([^;]+);0x([0-9a-fA-F]+);0x([0-9a-fA-F]+)$")
+LOCAL_URL_PATTERN = re.compile(r"^local:([^;]+);([0-9a-fA-Fx]+);([0-9a-fA-Fx]+)$", re.IGNORECASE)
 
 
 def fetch_genicam_xml(device: GvcpDevice) -> GenicamXml:
@@ -38,11 +40,13 @@ def _fetch_single_url(device: GvcpDevice, url: str) -> str:
     normalized = url.strip()
     local_match = LOCAL_URL_PATTERN.match(normalized.lower())
     if local_match:
-        _filename, addr_hex, size_hex = local_match.groups()
-        address = int(addr_hex, 16)
-        size = int(size_hex, 16)
+        filename, addr_hex, size_hex = local_match.groups()
+        address = _parse_hex_or_prefixed_int(addr_hex)
+        size = _parse_hex_or_prefixed_int(size_hex)
         payload = device.read_memory(address, size)
-        return payload.split(b"\x00", 1)[0].decode("utf-8", errors="replace")
+        if filename.lower().endswith(".zip") or payload.startswith(b"PK\x03\x04"):
+            return _decode_xml_from_zip(payload)
+        return _decode_xml_text(payload)
 
     if normalized.lower().startswith(("http://", "https://")):
         with urllib.request.urlopen(normalized, timeout=5) as response:  # nosec B310
@@ -50,4 +54,33 @@ def _fetch_single_url(device: GvcpDevice, url: str) -> str:
         return payload.decode("utf-8", errors="replace")
 
     raise RuntimeError(f"Unsupported GenICam XML URL format: {url}")
+
+
+def _parse_hex_or_prefixed_int(value: str) -> int:
+    text = value.strip().lower()
+    if text.startswith("0x"):
+        return int(text, 16)
+    # GenICam local URL commonly uses raw hex without 0x.
+    return int(text, 16)
+
+
+def _decode_xml_text(payload: bytes) -> str:
+    body = payload.split(b"\x00", 1)[0]
+    for encoding in ("utf-8", "utf-16-le", "gbk", "latin-1"):
+        try:
+            return body.decode(encoding)
+        except Exception:
+            continue
+    return body.decode("utf-8", errors="replace")
+
+
+def _decode_xml_from_zip(payload: bytes) -> str:
+    with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+        names = archive.namelist()
+        if not names:
+            raise RuntimeError("Empty GenICam ZIP payload")
+        xml_names = [name for name in names if name.lower().endswith(".xml")]
+        target = xml_names[0] if xml_names else names[0]
+        data = archive.read(target)
+    return _decode_xml_text(data)
 
