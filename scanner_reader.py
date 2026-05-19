@@ -113,23 +113,18 @@ class ScannerReader:
             ip=ip,
             interface_name=interface_name,
         )
-        if sdk_device and sdk_device.get("device_id"):
-            create_data = sdk_device["device_id"]
-            create_type = EasyID.EidDeviceDataType.eidDeviceDataTypeID
-        else:
-            create_data, create_type = self._resolve_create_device_params(
-                matched,
-                serial_number=serial_number,
-                ip=ip,
-            )
-
-        check_ret(
-            self.camera.eidCreateDevice(
-                create_data.encode("ascii"),
-                create_type,
-            ),
-            "eidCreateDevice",
+        create_attempts = self._build_create_device_attempts(
+            gvcp_matched=matched,
+            sdk_device=sdk_device,
+            serial_number=serial_number,
+            ip=ip,
         )
+        last_ret = EasyID.EidError.eidErrorInvalidParameter
+        for create_data, create_type in create_attempts:
+            last_ret = self.camera.eidCreateDevice(create_data, create_type)
+            if last_ret == EasyID.EidError.eidErrorOK:
+                break
+        check_ret(last_ret, "eidCreateDevice")
         check_ret(self.camera.eidOpenDevice(), "eidOpenDevice")
         self.connected = True
 
@@ -277,35 +272,46 @@ class ScannerReader:
             return None
         return matched_devices[0]
 
-    @staticmethod
-    def _resolve_create_device_params(
-        matched: dict[str, Any],
+    @classmethod
+    def _build_create_device_attempts(
+        cls,
         *,
+        gvcp_matched: dict[str, Any],
+        sdk_device: dict[str, Any] | None,
         serial_number: str | None,
         ip: str | None,
-    ) -> tuple[str, int]:
-        if serial_number:
-            return serial_number, EasyID.EidDeviceDataType.eidDeviceDataTypeSN
+    ) -> list[tuple[str, int]]:
+        """Build ordered eidCreateDevice attempts; CLI args take priority over SDK device_id."""
+        attempts: list[tuple[str, int]] = []
+        seen: set[tuple[str, int]] = set()
+
+        def add(value: str | None, data_type: int) -> None:
+            normalized = (value or "").strip()
+            if not normalized:
+                return
+            key = (normalized, data_type)
+            if key in seen:
+                return
+            seen.add(key)
+            attempts.append(key)
+
+        # User-specified identifiers first (SDK manual default is serial number; IP is common for --ip).
         if ip:
-            return ip, EasyID.EidDeviceDataType.eidDeviceDataTypeIP
+            add(ip, EasyID.EidDeviceDataType.eidDeviceDataTypeIP)
+        if serial_number:
+            add(serial_number, EasyID.EidDeviceDataType.eidDeviceDataTypeSN)
 
-        device_id = matched.get("device_id") or ""
-        if device_id:
-            return device_id, EasyID.EidDeviceDataType.eidDeviceDataTypeID
+        for source in (sdk_device, gvcp_matched):
+            if not source:
+                continue
+            add(source.get("serial_number"), EasyID.EidDeviceDataType.eidDeviceDataTypeSN)
+            add(source.get("ip_address"), EasyID.EidDeviceDataType.eidDeviceDataTypeIP)
+            add(source.get("mac_address"), EasyID.EidDeviceDataType.eidDeviceDataTypeMAC)
+            add(source.get("device_id"), EasyID.EidDeviceDataType.eidDeviceDataTypeID)
 
-        target_sn = matched.get("serial_number") or ""
-        if target_sn:
-            return target_sn, EasyID.EidDeviceDataType.eidDeviceDataTypeSN
-
-        target_ip = matched.get("ip_address") or ""
-        if target_ip:
-            return target_ip, EasyID.EidDeviceDataType.eidDeviceDataTypeIP
-
-        target_mac = matched.get("mac_address") or ""
-        if target_mac:
-            return target_mac, EasyID.EidDeviceDataType.eidDeviceDataTypeMAC
-
-        raise RuntimeError("Matched device has no usable identifier (device_id/sn/ip/mac).")
+        if not attempts:
+            raise RuntimeError("Matched device has no usable identifier (device_id/sn/ip/mac).")
+        return attempts
 
     @staticmethod
     def device_info_to_dict(info: EasyID.EidDeviceInfo) -> dict[str, Any]:

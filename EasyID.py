@@ -487,244 +487,245 @@ class Camera():
 
     @staticmethod
     def eidEnumDevices(deviceList: EidDeviceList, type: int) -> int:
-        EASYID.eidEnumDevices.argtype = (POINTER(EidDeviceList), c_uint32)
+        EASYID.eidEnumDevices.argtypes = (POINTER(EidDeviceList), c_uint32)
         EASYID.eidEnumDevices.restype = c_int
         # C原型:EASYID_API int EASYID_CALL eidEnumDevices(EidDeviceList* deviceList, uint32_t type);
         return EASYID.eidEnumDevices(byref(deviceList), c_uint32(type))
 
     def eidCreateDevice(self, data: str, type: int) -> int:
-        EASYID.eidCreateDevice.argtype = (c_char_p, c_int)
-        EASYID.eidCreateDevice.restype = POINTER(c_void_p)
+        EASYID.eidCreateDevice.argtypes = (c_char_p, c_int)
+        EASYID.eidCreateDevice.restype = c_void_p
         # C原型:EASYID_API EidCamera EASYID_CALL eidCreateDevice(const char* data, EidDeviceDataType type);
-        self.handle = EASYID.eidCreateDevice(data, c_int(type))
-        if bool(self.handle) == False:
-            return 3
-        return 0
+        payload = data.encode("ascii") if isinstance(data, str) else data
+        self.handle = EASYID.eidCreateDevice(payload, c_int(type))
+        if not self.handle:
+            return EidError.eidErrorInvalidParameter
+        return EidError.eidErrorOK
 
     def eidReleaseFrame(self) -> None:
-        EASYID.eidReleaseHandle.argtype = c_void_p
+        EASYID.eidReleaseHandle.argtypes = c_void_p
         EASYID.eidReleaseHandle.restype = None
         # C原型:EASYID_API void EASYID_CALL eidReleaseHandle(EidHandle handle);
         return EASYID.eidReleaseHandle(self.framehandle)
 
     def eidReleaseHandle(self) -> None:
-        EASYID.eidReleaseHandle.argtype = c_void_p
+        EASYID.eidReleaseHandle.argtypes = c_void_p
         EASYID.eidReleaseHandle.restype = None
         # C原型:EASYID_API void EASYID_CALL eidReleaseHandle(EidHandle handle);
         return EASYID.eidReleaseHandle(self.handle)
 
     def eidGetDeviceInfo(self, info: EidDeviceInfo) -> int:
-        EASYID.eidGetDeviceInfo.argtype = (c_void_p, POINTER(EidDeviceInfo))
+        EASYID.eidGetDeviceInfo.argtypes = (c_void_p, POINTER(EidDeviceInfo))
         EASYID.eidGetDeviceInfo.restype = c_int
         # C原型:EASYID_API int EASYID_CALL eidGetDeviceInfo(EidCamera camera, EidDeviceInfo* info);
         return EASYID.eidGetDeviceInfo(self.handle, byref(info))
 
     def eidOpenDevice(self) -> int:
-        EASYID.eidOpenDevice.argtype = c_void_p
+        EASYID.eidOpenDevice.argtypes = c_void_p
         EASYID.eidOpenDevice.restype = c_int
         # C原型:EASYID_API int EASYID_CALL eidOpenDevice(EidCamera camera);
         return EASYID.eidOpenDevice(self.handle)
 
     def eidCloseDevice(self) -> int:
-        EASYID.eidCloseDevice.argtype = c_void_p
+        EASYID.eidCloseDevice.argtypes = c_void_p
         EASYID.eidCloseDevice.restype = c_int
         # C原型:EASYID_API int EASYID_CALL eidCloseDevice(EidCamera camera);
         return EASYID.eidCloseDevice(self.handle)
 
     def eidIsDeviceOpen(self) -> int:
-        EASYID.eidIsDeviceOpen.argtype = c_void_p
+        EASYID.eidIsDeviceOpen.argtypes = c_void_p
         EASYID.eidIsDeviceOpen.restype = c_int
         # C原型:EASYID_API bool EASYID_CALL eidIsDeviceOpen(EidCamera camera);
         return EASYID.eidIsDeviceOpen(self.handle)
 
     def eidForceIpAddress(self, ipAddr: str, subnetMask: str, gateway: str) -> int:
-        EASYID.eidForceIpAddress.argtype = (c_void_p, c_char_p, c_char_p, c_char_p)
+        EASYID.eidForceIpAddress.argtypes = (c_void_p, c_char_p, c_char_p, c_char_p)
         EASYID.eidForceIpAddress.restype = c_int
         # C原型:EASYID_API int EASYID_CALL eidForceIpAddress(EidCamera camera, const char* ipAddr, const char* subnetMask, const char* gateway);
         return EASYID.eidForceIpAddress(self.handle, ipAddr.encode("ascii"), subnetMask.encode("ascii"), gateway.encode("ascii"))
 
     def eidDownloadGenICamXML(self, path: str) -> int:
-        EASYID.eidDownloadGenICamXML.argtype = (c_void_p, c_char_p)
+        EASYID.eidDownloadGenICamXML.argtypes = (c_void_p, c_char_p)
         EASYID.eidDownloadGenICamXML.restype = c_int
         # C原型:EASYID_API int EASYID_CALL eidDownloadGenICamXML(EidCamera camera, const char* path);
         return EASYID.eidDownloadGenICamXML(self.handle, path.encode("ascii"))
 
     def eidSaveDeviceConfig(self, path: str) -> int:
-        EASYID.eidSaveDeviceConfig.argtype = (c_void_p, c_char_p)
+        EASYID.eidSaveDeviceConfig.argtypes = (c_void_p, c_char_p)
         EASYID.eidSaveDeviceConfig.restype = c_int
         # C原型:EASYID_API int EASYID_CALL eidSaveDeviceConfig(EidCamera camera, const char* path);
         return EASYID.eidSaveDeviceConfig(self.handle, path.encode("ascii"))
 
     def eidLoadDeviceConfig(self, path: str, errorList: EidErrorList) -> int:
-        EASYID.eidLoadDeviceConfig.argtype = (c_void_p, c_char_p, POINTER(EidErrorList))
+        EASYID.eidLoadDeviceConfig.argtypes = (c_void_p, c_char_p, POINTER(EidErrorList))
         EASYID.eidLoadDeviceConfig.restype = c_int
         # C原型:EASYID_API int EASYID_CALL eidLoadDeviceConfig(EidCamera camera, const char* path, EidErrorList* errorList);
         return EASYID.eidLoadDeviceConfig(self.handle, path.encode("ascii"), byref(errorList))
 
     def eidGetFeatureType(self, name: str) -> int:
-        EASYID.eidGetFeatureType.argtype = (c_void_p, c_char_p)
+        EASYID.eidGetFeatureType.argtypes = (c_void_p, c_char_p)
         EASYID.eidGetFeatureType.restype = c_int
         # C原型:EASYID_API EidFeatureType EASYID_CALL eidGetFeatureType(EidCamera camera, const char* name);
         return EASYID.eidGetFeatureType(self.handle, name.encode("ascii"))
 
     def eidIsFeatureValid(self, name: str) -> bool:
-        EASYID.eidIsFeatureValid.argtype = (c_void_p, c_char_p)
+        EASYID.eidIsFeatureValid.argtypes = (c_void_p, c_char_p)
         EASYID.eidIsFeatureValid.restype = c_bool
         # C原型:EASYID_API bool EASYID_CALL eidIsFeatureValid(EidCamera camera, const char* name);
         return EASYID.eidIsFeatureValid(self.handle, name.encode("ascii"))
 
     def eidIsFeatureAvailable(self, name: str) -> bool:
-        EASYID.eidIsFeatureAvailable.argtype = (c_void_p, c_char_p)
+        EASYID.eidIsFeatureAvailable.argtypes = (c_void_p, c_char_p)
         EASYID.eidIsFeatureAvailable.restype = c_bool
         # C原型:EASYID_API bool EASYID_CALL eidIsFeatureAvailable(EidCamera camera, const char* name);
         return EASYID.eidIsFeatureAvailable(self.handle, name.encode("ascii"))
 
     def eidIsFeatureReadable(self, name: str) -> bool:
-        EASYID.eidIsFeatureReadable.argtype = (c_void_p, c_char_p)
+        EASYID.eidIsFeatureReadable.argtypes = (c_void_p, c_char_p)
         EASYID.eidIsFeatureReadable.restype = c_bool
         # C原型:EASYID_API bool EASYID_CALL eidIsFeatureReadable(EidCamera camera, const char* name);
         return EASYID.eidIsFeatureReadable(self.handle, name.encode("ascii"))
 
     def eidIsFeatureWriteable(self, name: str) -> bool:
-        EASYID.eidIsFeatureWriteable.argtype = (c_void_p, c_char_p)
+        EASYID.eidIsFeatureWriteable.argtypes = (c_void_p, c_char_p)
         EASYID.eidIsFeatureWriteable.restype = c_bool
         # C原型:EASYID_API bool EASYID_CALL eidIsFeatureWriteable(EidCamera camera, const char* name);
         return EASYID.eidIsFeatureWriteable(self.handle, name.encode("ascii"))
 
     def eidGetIntFeatureValue(self, name: str, value: c_int64) -> int:
-        EASYID.eidGetIntFeatureValue.argtype = (c_void_p, c_char_p, POINTER(c_int64))
+        EASYID.eidGetIntFeatureValue.argtypes = (c_void_p, c_char_p, POINTER(c_int64))
         EASYID.eidGetIntFeatureValue.restype = c_int
         # C原型:EASYID_API int EASYID_CALL eidGetIntFeatureValue(EidCamera camera, const char* name, int64_t* value);
         return EASYID.eidGetIntFeatureValue(self.handle, name.encode("ascii"), byref(value))
 
     def eidSetIntFeatureValue(self, name: str, value: int) -> int:
-        EASYID.eidSetIntFeatureValue.argtype = (c_void_p, c_char_p, c_int64)
+        EASYID.eidSetIntFeatureValue.argtypes = (c_void_p, c_char_p, c_int64)
         EASYID.eidSetIntFeatureValue.restype = c_int
         # C原型:EASYID_API int EASYID_CALL eidSetIntFeatureValue(EidCamera camera, const char* name, int64_t value);
         return EASYID.eidSetIntFeatureValue(self.handle, name.encode("ascii"), c_int64(value))
 
     def eidGetIntFeatureInfo(self, name: str, info: EidIntFeatureInfo) -> int:
-        EASYID.eidGetIntFeatureInfo.argtype = (c_void_p, c_char_p, POINTER(EidIntFeatureInfo))
+        EASYID.eidGetIntFeatureInfo.argtypes = (c_void_p, c_char_p, POINTER(EidIntFeatureInfo))
         EASYID.eidGetIntFeatureInfo.restype = c_int
         # C原型:EASYID_API int EASYID_CALL eidGetIntFeatureInfo(EidCamera camera, const char* name, EidIntFeatureInfo* info);
         return EASYID.eidGetIntFeatureInfo(self.handle, name.encode("ascii"), byref(info))
 
     def eidGetFloatFeatureValue(self, name: str, value: c_double) -> int:
-        EASYID.eidGetFloatFeatureValue.argtype = (c_void_p, c_char_p, POINTER(c_double))
+        EASYID.eidGetFloatFeatureValue.argtypes = (c_void_p, c_char_p, POINTER(c_double))
         EASYID.eidGetFloatFeatureValue.restype = c_int
         # C原型:EASYID_API int EASYID_CALL eidGetFloatFeatureValue(EidCamera camera, const char* name, double* value);
         return EASYID.eidGetFloatFeatureValue(self.handle, name.encode("ascii"), byref(value))
 
     def eidSetFloatFeatureValue(self, name: str, value: float) -> int:
-        EASYID.eidSetFloatFeatureValue.argtype = (c_void_p, c_char_p, c_double)
+        EASYID.eidSetFloatFeatureValue.argtypes = (c_void_p, c_char_p, c_double)
         EASYID.eidSetFloatFeatureValue.restype = c_int
         # C原型:EASYID_API int EASYID_CALL eidSetFloatFeatureValue(EidCamera camera, const char* name, double value);
         return EASYID.eidSetFloatFeatureValue(self.handle, name.encode("ascii"), c_double(value))
 
     def eidGetFloatFeatureInfo(self, name: str, info: EidFloatFeatureInfo) -> int:
-        EASYID.eidGetFloatFeatureInfo.argtype = (c_void_p, c_char_p, POINTER(EidFloatFeatureInfo))
+        EASYID.eidGetFloatFeatureInfo.argtypes = (c_void_p, c_char_p, POINTER(EidFloatFeatureInfo))
         EASYID.eidGetFloatFeatureInfo.restype = c_int
         # C原型:EASYID_API int EASYID_CALL eidGetFloatFeatureInfo(EidCamera camera, const char* name, EidFloatFeatureInfo* info);
         return EASYID.eidGetFloatFeatureInfo(self.handle, name.encode("ascii"), byref(info))
 
     def eidGetBoolFeatureValue(self, name: str, value: c_bool) -> int:
-        EASYID.eidGetBoolFeatureValue.argtype = (c_void_p, c_char_p, POINTER(c_bool))
+        EASYID.eidGetBoolFeatureValue.argtypes = (c_void_p, c_char_p, POINTER(c_bool))
         EASYID.eidGetBoolFeatureValue.restype = c_int
         # C原型:EASYID_API int EASYID_CALL eidGetBoolFeatureValue(EidCamera camera, const char* name, bool* value);
         return EASYID.eidGetBoolFeatureValue(self.handle, name.encode("ascii"), byref(value))
 
     def eidSetBoolFeatureValue(self, name: str, value: bool) -> int:
-        EASYID.eidSetBoolFeatureValue.argtype = (c_void_p, c_char_p, c_bool)
+        EASYID.eidSetBoolFeatureValue.argtypes = (c_void_p, c_char_p, c_bool)
         EASYID.eidSetBoolFeatureValue.restype = c_int
         # C原型:EASYID_API int EASYID_CALL eidSetBoolFeatureValue(EidCamera camera, const char* name, bool value);
         return EASYID.eidSetBoolFeatureValue(self.handle, name.encode("ascii"), c_bool(value))
 
     def eidGetStringFeatureValue(self, name: str, value: c_char_p, size: c_uint32) -> int:
-        EASYID.eidGetStringFeatureValue.argtype = (c_void_p, c_char_p, c_char_p, POINTER(c_uint32))
+        EASYID.eidGetStringFeatureValue.argtypes = (c_void_p, c_char_p, c_char_p, POINTER(c_uint32))
         EASYID.eidGetStringFeatureValue.restype = c_int
         # C原型:EASYID_API int EASYID_CALL eidGetStringFeatureValue(EidCamera camera, const char* name, char* value, uint32_t* size);
         return EASYID.eidGetStringFeatureValue(self.handle, name.encode("ascii"), value, byref(size))
 
     def eidSetStringFeatureValue(self, name: str, value: str) -> int:
-        EASYID.eidSetStringFeatureValue.argtype = (c_void_p, c_char_p, c_char_p)
+        EASYID.eidSetStringFeatureValue.argtypes = (c_void_p, c_char_p, c_char_p)
         EASYID.eidSetStringFeatureValue.restype = c_int
         # C原型:EASYID_API int EASYID_CALL eidSetStringFeatureValue(EidCamera camera, const char* name, const char* value);
         return EASYID.eidSetStringFeatureValue(self.handle, name.encode("ascii"), value.encode("utf-8"))
 
     def eidGetStringFeatureInfo(self, name: str, info: EidStringFeatureInfo) -> int:
-        EASYID.eidGetStringFeatureInfo.argtype = (c_void_p, c_char_p, POINTER(EidStringFeatureInfo))
+        EASYID.eidGetStringFeatureInfo.argtypes = (c_void_p, c_char_p, POINTER(EidStringFeatureInfo))
         EASYID.eidGetStringFeatureInfo.restype = c_int
         # C原型:EASYID_API int EASYID_CALL eidGetStringFeatureInfo(EidCamera camera, const char* name, EidStringFeatureInfo* info);
         return EASYID.eidGetStringFeatureInfo(self.handle, name.encode("ascii"), byref(info))
 
     def eidGetEnumFeatureValue(self, name: str, value: c_uint64) -> int:
-        EASYID.eidGetEnumFeatureValue.argtype = (c_void_p, c_char_p, POINTER(c_uint64))
+        EASYID.eidGetEnumFeatureValue.argtypes = (c_void_p, c_char_p, POINTER(c_uint64))
         EASYID.eidGetEnumFeatureValue.restype = c_int
         # C原型:EASYID_API int EASYID_CALL eidGetEnumFeatureValue(EidCamera camera, const char* name, uint64_t* value);
         return EASYID.eidGetEnumFeatureValue(self.handle, name.encode("ascii"), byref(value))
 
     def eidSetEnumFeatureValue(self, name: str, value: int) -> int:
-        EASYID.eidSetEnumFeatureValue.argtype = (c_void_p, c_char_p, c_uint64)
+        EASYID.eidSetEnumFeatureValue.argtypes = (c_void_p, c_char_p, c_uint64)
         EASYID.eidSetEnumFeatureValue.restype = c_int
         # C原型:EASYID_API int EASYID_CALL eidSetEnumFeatureValue(EidCamera camera, const char* name, uint64_t value);
         return EASYID.eidSetEnumFeatureValue(self.handle, name.encode("ascii"), c_uint64(value))
 
     def eidGetEnumFeatureSymbol(self, name: str, value: c_char_p, size: c_uint32) -> int:
-        EASYID.eidGetEnumFeatureSymbol.argtype = (c_void_p, c_char_p, c_char_p, c_uint32)
+        EASYID.eidGetEnumFeatureSymbol.argtypes = (c_void_p, c_char_p, c_char_p, c_uint32)
         EASYID.eidGetEnumFeatureSymbol.restype = c_int
         # C原型:EASYID_API int EASYID_CALL eidGetEnumFeatureSymbol(EidCamera camera, const char* name, char* value, uint32_t size);
         return EASYID.eidGetEnumFeatureSymbol(self.handle, name.encode("ascii"), value, c_uint32(size))
 
     def eidSetEnumFeatureSymbol(self, name: str, value: str) -> int:
-        EASYID.eidSetEnumFeatureSymbol.argtype = (c_void_p, c_char_p, c_char_p)
+        EASYID.eidSetEnumFeatureSymbol.argtypes = (c_void_p, c_char_p, c_char_p)
         EASYID.eidSetEnumFeatureSymbol.restype = c_int
         # C原型:EASYID_API int EASYID_CALL eidSetEnumFeatureSymbol(EidCamera camera, const char* name, const char* value);
         return EASYID.eidSetEnumFeatureSymbol(self.handle, name.encode("ascii"), value.encode("ascii"))
 
     def eidGetEnumFeatureEntryList(self, name: str, entryList: EidEnumFeatureEntryList) -> int:
-        EASYID.eidGetEnumFeatureEntryList.argtype = (c_void_p, c_char_p, POINTER(EidEnumFeatureEntryList))
+        EASYID.eidGetEnumFeatureEntryList.argtypes = (c_void_p, c_char_p, POINTER(EidEnumFeatureEntryList))
         EASYID.eidGetEnumFeatureEntryList.restype = c_int
         # C原型:EASYID_API int EASYID_CALL eidGetEnumFeatureEntryList(EidCamera camera, const char* name, EidEnumFeatureEntryList* entryList);
         return EASYID.eidGetEnumFeatureEntryList(self.handle, name.encode("ascii"), byref(entryList))
 
     def eidExecCommandFeature(self, name: str) -> int:
-        EASYID.eidExecCommandFeature.argtype = (c_void_p, c_char_p)
+        EASYID.eidExecCommandFeature.argtypes = (c_void_p, c_char_p)
         EASYID.eidExecCommandFeature.restype = c_int
         # C原型:EASYID_API int EASYID_CALL eidExecCommandFeature(EidCamera camera, const char* name);
         return EASYID.eidExecCommandFeature(self.handle, name.encode("ascii"))
 
     def eidEnumFeatureChildren(self, name: str, fn, userData: c_void_p) -> int:
-        EASYID.eidEnumFeatureChildren.argtype = (c_void_p, c_char_p, c_void_p, c_void_p)
+        EASYID.eidEnumFeatureChildren.argtypes = (c_void_p, c_char_p, c_void_p, c_void_p)
         EASYID.eidEnumFeatureChildren.restype = c_int
         # C原型:EASYID_API int EASYID_CALL eidEnumFeatureChildren(EidCamera camera, const char* name, EidEnumFeatureChildrenCallback fn, void* userData);
         return EASYID.eidEnumFeatureChildren(self.handle, name.encode("ascii"), fn, userData)
 
     def eidStartGrabbing(self, bufferCount: int) -> int:
-        EASYID.eidStartGrabbing.argtype = (c_void_p, c_int)
+        EASYID.eidStartGrabbing.argtypes = (c_void_p, c_int)
         EASYID.eidStartGrabbing.restype = c_int
         # C原型:EASYID_API int EASYID_CALL eidStartGrabbing(EidCamera camera, int bufferCount);
         return EASYID.eidStartGrabbing(self.handle, c_int(bufferCount))
 
     def eidStopGrabbing(self) -> int:
-        EASYID.eidStopGrabbing.argtype = (c_void_p)
+        EASYID.eidStopGrabbing.argtypes = (c_void_p)
         EASYID.eidStopGrabbing.restype = c_int
         # C原型:EASYID_API int EASYID_CALL eidStopGrabbing(EidCamera camera);
         return EASYID.eidStopGrabbing(self.handle)
 
     def eidIsGrabbing(self) -> int:
-        EASYID.eidIsGrabbing.argtype = (c_void_p)
+        EASYID.eidIsGrabbing.argtypes = (c_void_p)
         EASYID.eidIsGrabbing.restype = c_int
         # C原型:EASYID_API bool EASYID_CALL eidIsGrabbing(EidCamera camera);
         return EASYID.eidIsGrabbing(self.handle)
 
     def eidClearFrameBuffer(self) -> int:
-        EASYID.eidClearFrameBuffer.argtype = (c_void_p)
+        EASYID.eidClearFrameBuffer.argtypes = (c_void_p)
         EASYID.eidClearFrameBuffer.restype = c_int
         # C原型:EASYID_API int EASYID_CALL eidClearFrameBuffer(EidCamera camera);
         return EASYID.eidClearFrameBuffer(self.handle)
 
     def eidGetFrame(self, timeout: int) -> int:
-        EASYID.eidGetFrame.argtype = (c_void_p, c_uint32)
+        EASYID.eidGetFrame.argtypes = (c_void_p, c_uint32)
         EASYID.eidGetFrame.restype = POINTER(c_void_p)
         # C原型:EASYID_API EidFrame EASYID_CALL eidGetFrame(EidCamera camera, uint32_t timeout);
         self.framehandle = EASYID.eidGetFrame(self.handle, c_uint32(timeout))
@@ -733,31 +734,31 @@ class Camera():
         return 0
 
     def eidIsFrameValid(self) -> bool:
-        EASYID.eidIsFrameValid.argtype = (c_void_p)
+        EASYID.eidIsFrameValid.argtypes = (c_void_p)
         EASYID.eidIsFrameValid.restype = c_bool
         # C原型:EASYID_API bool EASYID_CALL eidIsFrameValid(EidFrame frame);
         return EASYID.eidIsFrameValid(self.framehandle)
 
     def eidGetFrameInfo(self, info: EidFrameInfo) -> int:
-        EASYID.eidGetFrameInfo.argtype = (c_void_p, POINTER(EidFrameInfo))
+        EASYID.eidGetFrameInfo.argtypes = (c_void_p, POINTER(EidFrameInfo))
         EASYID.eidGetFrameInfo.restype = c_int
         # C原型:EASYID_API int EASYID_CALL eidGetFrameInfo(EidFrame frame, EidFrameInfo* info);
         return EASYID.eidGetFrameInfo(self.framehandle, byref(info))
 
     def eidRegisterFrameCallback(self, cb, userData: c_void_p) -> int:
-        EASYID.eidRegisterFrameCallback.argtype = (c_void_p, c_void_p, c_void_p)
+        EASYID.eidRegisterFrameCallback.argtypes = (c_void_p, c_void_p, c_void_p)
         EASYID.eidRegisterFrameCallback.restype = c_int
         # C原型:EASYID_API int EASYID_CALL eidRegisterFrameCallback(EidCamera camera, EidFrameCallback cb, void* userData);
         return EASYID.eidRegisterFrameCallback(self.handle, cb, userData)
 
     def eidRegisterConnectionCallback(self, cb, userData: c_void_p) -> int:
-        EASYID.eidRegisterConnectionCallback.argtype = (c_void_p, c_void_p, c_void_p)
+        EASYID.eidRegisterConnectionCallback.argtypes = (c_void_p, c_void_p, c_void_p)
         EASYID.eidRegisterConnectionCallback.restype = c_int
         # C原型:EASYID_API int EASYID_CALL eidRegisterConnectionCallback(EidCamera camera, EidConnectionCallback cb, void* userData);
         return EASYID.eidRegisterConnectionCallback(self.handle, cb, userData)
 
     def eidRegisterFeatureUpdateCallback(self, cb, userData: c_void_p) -> int:
-        EASYID.eidRegisterFeatureUpdateCallback.argtype = (c_void_p, c_void_p, c_void_p)
+        EASYID.eidRegisterFeatureUpdateCallback.argtypes = (c_void_p, c_void_p, c_void_p)
         EASYID.eidRegisterFeatureUpdateCallback.restype = c_int
         # C原型:EASYID_API int EASYID_CALL eidRegisterFeatureUpdateCallback(EidCamera camera, EidFeatureUpdateCallback cb, void* userData);
         return EASYID.eidRegisterFeatureUpdateCallback(self.handle, cb, userData)
