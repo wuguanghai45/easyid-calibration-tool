@@ -7,9 +7,10 @@
 一次完整采集会依次完成：
 
 1. 通过 **IMV SDK** 枚举并连接指定设备（序列号或 IP）
-2. 保存 `device_info.json`（型号、SN、IP、MAC 等）
-3. 读取并 `UserSetLoad` 当前配置组，再切换目标 UserSet 导出 `software_config.xml` / `hardware_config.xml`（见 `userset_info.json`）
-4. 软触发采集一帧，保存图像与 `scan_result.json`（解码状态、条码内容等）
+2. **GigE 工厂网段**：若设备 IP 不是 `192.168.40.200`，连接前自动改为该地址并持久化（网关 `192.168.40.1`，子网 `255.255.255.0`）
+3. 保存 `device_info.json`（型号、SN、IP、MAC、`ip_before` / `ip_after` / `ip_reconfigured` 等）
+4. 读取并 `UserSetLoad` 当前配置组，再切换目标 UserSet 导出 `software_config.xml` / `hardware_config.xml`（见 `userset_info.json`）
+5. 软触发采集一帧，保存图像与 `scan_result.json`（解码状态、条码内容等）
 
 可选：`--dump-features` 导出可读 GenICam 特征摘要，用于调试不同机型的特征名差异。
 
@@ -20,7 +21,7 @@
 | 操作系统 | **Windows / Linux**（MVSDK 不支持 macOS） |
 | Python | 3.10+（建议 3.10 或 3.11） |
 | 原生库 | `MVSDKmd.dll`（Windows）或 `libMVSDK.so`（Linux） |
-| 网络 | GigE 设备与 PC 在同一网段（使用 `--ip` 时） |
+| 网络 | GigE：PC 网卡建议在工厂网段 `192.168.40.0/24`；标定推荐 `--sn`（改 IP 后仍可靠定位） |
 
 ### 安装 MVSDK 原生库
 
@@ -66,17 +67,31 @@ pip install -r requirements.txt
 
 ### 基本命令
 
-通过**序列号**连接：
+通过**序列号**连接（**推荐**，改 IP 后仍可按 SN 找到设备）：
 
 ```bash
 python read_scanner_calibration.py --sn <扫码器序列号>
 ```
 
-通过 **IP 地址**连接：
+通过 **IP 地址**连接（若设备当前 IP 非工厂地址，工具会先改为 `192.168.40.200` 再连接）：
 
 ```bash
-python read_scanner_calibration.py --ip 192.168.1.100
+python read_scanner_calibration.py --ip 192.168.40.200
 ```
+
+### 工厂 GigE 网段
+
+连接前会自动检查 GigE 设备 IP：
+
+| 项 | 默认值 |
+|----|--------|
+| 设备 IP | `192.168.40.200` |
+| 网关 | `192.168.40.1` |
+| 子网掩码 | `255.255.255.0` |
+
+流程：`IMV_GIGE_ForceIpAddress` → 打开设备 → 写入 `GevPersistent*` → 关闭并等待约 2s → 按序列号重新枚举后连接。USB 设备跳过此步骤。
+
+常量定义见 [`scanner_config.py`](scanner_config.py)；实现见 [`scanner/gige_network.py`](scanner/gige_network.py)。
 
 仅列举当前可发现设备：
 
@@ -116,7 +131,7 @@ python read_scanner_calibration.py --ip 192.168.1.100 --interface "192.168.1"
 
 ```text
 <序列号或IP>_<YYYYMMDD_HHMMSS>/
-├── device_info.json
+├── device_info.json          # 含 ip_before / ip_after / ip_reconfigured（GigE 改 IP 时）
 ├── software_config.xml
 ├── hardware_config.xml
 ├── userset_info.json           # 导出前后 UserSetSelector
@@ -137,12 +152,16 @@ python read_scanner_calibration.py --ip 192.168.1.100 --interface "192.168.1"
 
 ```mermaid
 flowchart LR
-    A[IMV_EnumDevices] --> B[CreateHandle/Open]
-    B --> C[device_info.json]
-    C --> D[UserSet + SaveDeviceCfg]
-    D --> E[软触发采图]
-    E --> F[scan_image + scan_result]
-    F --> G[Close/DestroyHandle]
+    A[IMV_EnumDevices] --> B{GigE IP 匹配?}
+    B -->|否| C[ForceIp + 持久化]
+    C --> D[重枚举按 SN]
+    B -->|是| D
+    D --> E[CreateHandle/Open]
+    E --> F[device_info.json]
+    F --> G[UserSet + SaveDeviceCfg]
+    G --> H[软触发采图]
+    H --> I[scan_image + scan_result]
+    I --> J[Close/DestroyHandle]
 ```
 
 软触发步骤（`scanner/capture.py`）：
@@ -186,6 +205,10 @@ easyid-calibration-tool/
 **`No scanner device found`**
 
 检查网线、IP、防火墙；使用 `--list-devices` 与 `--diag`。
+
+**改 IP 后找不到设备**
+
+确认 PC 网卡已配置为 `192.168.40.x` 网段；优先使用 `--sn` 而非旧 IP。
 
 **采图为空或超时**
 

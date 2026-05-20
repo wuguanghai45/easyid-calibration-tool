@@ -178,7 +178,17 @@ def main() -> int:
 
         device_info = reader.connect(serial_number=args.sn, ip=args.ip, interface_name=args.interface)
         write_json(session_dir / "device_info.json", device_info)
-        logging.info("Device connected: %s", device_info.get("serial_number") or "unknown")
+        if device_info.get("ip_reconfigured"):
+            logging.info(
+                "GigE IP reconfigured: %s -> %s",
+                device_info.get("ip_before"),
+                device_info.get("ip_after"),
+            )
+        logging.info(
+            "Device connected: %s (ip=%s)",
+            device_info.get("serial_number") or "unknown",
+            device_info.get("ip_address") or device_info.get("ip_after") or "n/a",
+        )
 
         if args.dump_features:
             feature_map = reader.dump_feature_candidates(session_dir)

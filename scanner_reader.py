@@ -11,7 +11,12 @@ from scanner.capture import capture_soft_trigger_frame
 from scanner.config_export import export_device_configs
 from scanner.device import close_camera, enum_devices, find_device, open_camera
 from scanner.feature_dump import dump_readable_features
-from scanner_config import DEFAULT_BUFFER_COUNT, DEFAULT_FRAME_TIMEOUT_MS
+from scanner.gige_network import ensure_target_ip, needs_ip_update
+from scanner_config import (
+    DEFAULT_BUFFER_COUNT,
+    DEFAULT_FRAME_TIMEOUT_MS,
+    TARGET_DEVICE_IP,
+)
 from scanner_utils import ScannerProtocolError, ensure_dir, write_json
 
 if TYPE_CHECKING:
@@ -59,14 +64,48 @@ class ScannerReader:
         ip: str | None = None,
         interface_name: str | None = None,
     ) -> dict[str, Any]:
+        logger.info("Scanning devices...")
         matched = self.find_device(serial_number=serial_number, ip=ip, interface_name=interface_name)
         self._interface_name = interface_name
+
+        ip_meta: dict[str, Any] = {
+            "ip_before": str(matched.get("ip_address", "")),
+            "ip_after": str(matched.get("ip_address", "")),
+            "ip_reconfigured": False,
+        }
+
+        if needs_ip_update(matched, TARGET_DEVICE_IP):
+            logger.info(
+                "IP mismatch, reconfiguring to %s (gateway/subnet from factory defaults)",
+                TARGET_DEVICE_IP,
+            )
+            result = ensure_target_ip(matched)
+            matched = result["device"]
+            ip_meta = {
+                "ip_before": result["ip_before"],
+                "ip_after": result["ip_after"],
+                "ip_reconfigured": result["ip_reconfigured"],
+            }
+            sn = serial_number or str(matched.get("serial_number", ""))
+            if sn:
+                devices = self.enum_devices(interface_name=interface_name)
+                matched = find_device(
+                    devices,
+                    serial_number=sn,
+                    interface_name=interface_name,
+                )
+
+        connect_ip = ip
+        if ip_meta["ip_reconfigured"]:
+            connect_ip = TARGET_DEVICE_IP
+
         self.cam, self.device_info = open_camera(
             matched,
-            serial_number=serial_number,
-            ip=ip,
+            serial_number=serial_number or str(matched.get("serial_number", "")) or None,
+            ip=connect_ip,
             interface_name=interface_name,
         )
+        self.device_info.update(ip_meta)
         self.connected = True
         return self.device_info
 
