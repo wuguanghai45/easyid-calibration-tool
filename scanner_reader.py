@@ -17,7 +17,12 @@ from scanner.device import (
     refresh_device_via_unicast,
 )
 from scanner.feature_dump import dump_readable_features
-from scanner.gige_network import ensure_target_ip, needs_ip_update
+from scanner.gige_network import (
+    ensure_target_ip,
+    host_has_factory_subnet,
+    needs_ip_update,
+    recover_gige_to_host_subnet,
+)
 from scanner_config import (
     DEFAULT_BUFFER_COUNT,
     DEFAULT_FRAME_TIMEOUT_MS,
@@ -78,22 +83,49 @@ class ScannerReader:
             "ip_before": str(matched.get("ip_address", "")),
             "ip_after": str(matched.get("ip_address", "")),
             "ip_reconfigured": False,
+            "ip_recovered": False,
         }
 
-        if needs_ip_update(matched, TARGET_DEVICE_IP):
-            logger.info(
-                "IP mismatch, reconfiguring to %s (gateway/subnet from factory defaults)",
-                TARGET_DEVICE_IP,
-            )
-            result = ensure_target_ip(matched)
+        device_ip = str(matched.get("ip_address", ""))
+        if (
+            matched.get("camera_type") == "GigE"
+            and device_ip == TARGET_DEVICE_IP
+            and not host_has_factory_subnet()
+        ):
+            result = recover_gige_to_host_subnet(matched)
             matched = result["device"]
-            ip_meta = {
-                "ip_before": result["ip_before"],
-                "ip_after": result["ip_after"],
-                "ip_reconfigured": result["ip_reconfigured"],
-            }
+            ip_meta.update(
+                {
+                    "ip_before": result["ip_before"],
+                    "ip_after": result["ip_after"],
+                    "ip_recovered": result["ip_recovered"],
+                    "recovery_host_ip": result.get("recovery_host_ip"),
+                }
+            )
+
+        if needs_ip_update(matched, TARGET_DEVICE_IP):
+            if host_has_factory_subnet():
+                logger.info(
+                    "IP mismatch, reconfiguring to %s (gateway/subnet from factory defaults)",
+                    TARGET_DEVICE_IP,
+                )
+                result = ensure_target_ip(matched)
+                matched = result["device"]
+                ip_meta = {
+                    "ip_before": result["ip_before"],
+                    "ip_after": result["ip_after"],
+                    "ip_reconfigured": result["ip_reconfigured"],
+                    "ip_recovered": False,
+                }
+            else:
+                logger.warning(
+                    "Device IP is %s (not factory %s) and host has no 192.168.40.x address; "
+                    "continuing on current subnet. Add 192.168.40.x on the camera NIC to apply factory IP.",
+                    device_ip,
+                    TARGET_DEVICE_IP,
+                )
             sn = serial_number or str(matched.get("serial_number", ""))
-            if sn:
+            if sn and (ip_meta.get("ip_reconfigured") or ip_meta.get("ip_recovered")):
                 devices = self.enum_devices(interface_name=interface_name)
                 matched = find_device(
                     devices,
@@ -102,8 +134,10 @@ class ScannerReader:
                 )
 
         connect_ip = ip
-        if ip_meta["ip_reconfigured"]:
+        if ip_meta.get("ip_reconfigured"):
             connect_ip = TARGET_DEVICE_IP
+        elif ip_meta.get("ip_recovered"):
+            connect_ip = str(matched.get("ip_address", "")) or connect_ip
 
         if matched.get("camera_type") == "GigE":
             matched = refresh_device_via_unicast(

@@ -122,6 +122,24 @@ def _device_subnet(device_ip: str) -> ipaddress.IPv4Network | None:
         return None
 
 
+def select_camera_host_ip() -> str | None:
+    """Pick the most likely NIC IPv4 for the industrial camera (not VPN/WAN)."""
+    candidates = _collect_local_ipv4()
+    if not candidates:
+        return None
+
+    def score(ip: str) -> tuple[int, str]:
+        if ip.startswith("192.168."):
+            return (300, ip)
+        if ip.startswith("172."):
+            return (200, ip)
+        if ip.startswith("10."):
+            return (50, ip)
+        return (100, ip)
+
+    return max(candidates, key=score)
+
+
 def find_local_ip_for_device(device_ip: str) -> str | None:
     """Find a host IPv4 on the same /24 subnet as the GigE device."""
     device_net = _device_subnet(device_ip)

@@ -9,7 +9,12 @@ from typing import TYPE_CHECKING, Any
 
 from imv_sdk.IMVDefines import IMV_ECreateHandleMode, IMV_OK
 
-from scanner.device import close_camera, enum_devices, find_local_ip_for_device
+from scanner.device import (
+    close_camera,
+    enum_devices,
+    find_local_ip_for_device,
+    select_camera_host_ip,
+)
 from scanner_config import (
     GIGE_IP_SETTLE_SEC,
     TARGET_DEVICE_IP,
@@ -22,6 +27,10 @@ if TYPE_CHECKING:
     from imv_sdk.IMVApi import MvCamera
 
 logger = logging.getLogger(__name__)
+
+
+def host_has_factory_subnet() -> bool:
+    return find_local_ip_for_device(TARGET_DEVICE_IP) is not None
 
 
 def needs_ip_update(device: dict[str, Any], target_ip: str = TARGET_DEVICE_IP) -> bool:
@@ -96,6 +105,73 @@ def _create_handle_by_index(cam: MvCamera, index: int) -> None:
         raise ScannerProtocolError(f"IMV_CreateHandle failed with error code {ret}")
 
 
+def recover_gige_to_host_subnet(
+    device: dict[str, Any],
+    *,
+    host_ip: str | None = None,
+    settle_sec: float = GIGE_IP_SETTLE_SEC,
+) -> dict[str, Any]:
+    """
+    ForceIp the device onto the host's current /24 (e.g. 192.168.30.200).
+
+    Used when the device was left on the factory IP but the PC has no 192.168.40.x address.
+    Does not change persistent Gev settings (session recovery only).
+    """
+    from imv_sdk.IMVApi import MvCamera
+
+    chosen_host = host_ip or select_camera_host_ip()
+    if not chosen_host:
+        raise ScannerProtocolError("No host IPv4 available for GigE subnet recovery.")
+
+    octets = chosen_host.split(".")
+    if len(octets) != 4:
+        raise ScannerProtocolError(f"Invalid host IPv4 for recovery: {chosen_host}")
+
+    recovered_ip = f"{octets[0]}.{octets[1]}.{octets[2]}.200"
+    gateway = f"{octets[0]}.{octets[1]}.{octets[2]}.1"
+    ip_before = str(device.get("ip_address", ""))
+    serial_number = str(device.get("serial_number", ""))
+    index = int(device.get("index", 0))
+
+    logger.warning(
+        "Recovering GigE device %s -> %s (host %s, gateway %s) so IMV can connect on the current subnet",
+        ip_before,
+        recovered_ip,
+        chosen_host,
+        gateway,
+    )
+
+    cam = MvCamera()
+    try:
+        _create_handle_by_index(cam, index)
+        force_ip_address(cam, recovered_ip, TARGET_SUBNET_MASK, gateway)
+    finally:
+        close_camera(cam)
+
+    logger.info("Waiting %.1fs after GigE recovery ForceIp", settle_sec)
+    time.sleep(settle_sec)
+
+    devices = _enum_after_ip_change(recovered_ip)
+    refreshed = _find_refreshed_device(
+        devices,
+        serial_number=serial_number,
+        target_ip=recovered_ip,
+    )
+    if refreshed is None:
+        raise ScannerProtocolError(
+            f"Device not found after recovery to {recovered_ip}. "
+            f"Host IPv4 on camera link: {chosen_host}."
+        )
+
+    return {
+        "ip_before": ip_before,
+        "ip_after": recovered_ip,
+        "ip_recovered": True,
+        "recovery_host_ip": chosen_host,
+        "device": refreshed,
+    }
+
+
 def ensure_target_ip(
     device: dict[str, Any],
     *,
@@ -114,6 +190,13 @@ def ensure_target_ip(
     ip_before = str(device.get("ip_address", ""))
     serial_number = str(device.get("serial_number", ""))
     index = int(device.get("index", 0))
+
+    if not host_has_factory_subnet():
+        raise ScannerProtocolError(
+            f"Cannot set factory IP {target_ip}: host has no address on 192.168.40.0/24. "
+            f"Add e.g. 192.168.40.10/24 on the camera NIC, or run without factory IP change "
+            f"(device will stay on {ip_before})."
+        )
 
     logger.info(
         "GigE IP mismatch: current=%s target=%s, reconfiguring (SN=%s)",
