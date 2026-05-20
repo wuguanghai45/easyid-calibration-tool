@@ -7,7 +7,7 @@ import time
 from ctypes import byref, c_void_p
 from typing import TYPE_CHECKING, Any
 
-from imv_sdk.IMVDefines import IMV_ECreateHandleMode, IMV_OK
+from imv_sdk.IMVDefines import IMV_ECreateHandleMode, IMV_INVALID_IP, IMV_OK
 
 from scanner.device import (
     close_camera,
@@ -209,29 +209,76 @@ def ensure_target_ip(
     )
 
     cam = MvCamera()
+    cross_subnet = not find_local_ip_for_device(ip_before)
     try:
         _create_handle_by_index(cam, index)
-
-        # Open while the device is still on the current subnet (reachable from the host).
         ret = cam.IMV_Open()
-        if ret != IMV_OK:
+
+        if ret == IMV_OK and not cross_subnet:
+            # Host and device share a subnet: persist, then ForceIp.
+            persist_gige_ip(cam, target_ip, subnet_mask, gateway)
+            close_camera(cam)
+            cam = MvCamera()
+            _create_handle_by_index(cam, index)
+            force_ip_address(cam, target_ip, subnet_mask, gateway)
+            logger.info("ForceIp applied (%s -> %s)", ip_before, target_ip)
+            close_camera(cam)
+            cam = None
+        elif ret == IMV_INVALID_IP or cross_subnet:
+            # e.g. device 192.168.30.x, host only 192.168.40.x — ForceIp first, then Open+persist.
+            if not host_has_factory_subnet():
+                raise ScannerProtocolError(
+                    f"IMV_Open failed (code {ret}): device at {ip_before} is unreachable. "
+                    f"Add a host address on the device subnet or on 192.168.40.0/24."
+                )
+            logger.info(
+                "Device at %s not reachable from host; ForceIp to %s before Open/persist",
+                ip_before,
+                target_ip,
+            )
+            if cam.IMV_IsOpen():
+                cam.IMV_Close()
+            force_ip_address(cam, target_ip, subnet_mask, gateway)
+            close_camera(cam)
+            cam = None
+
+            logger.info("Waiting %.1fs for GigE network after ForceIp", settle_sec)
+            time.sleep(settle_sec)
+
+            devices = _enum_after_ip_change(target_ip)
+            refreshed = _find_refreshed_device(
+                devices,
+                serial_number=serial_number,
+                target_ip=target_ip,
+            )
+            if refreshed is None:
+                raise ScannerProtocolError(
+                    f"Device not found after ForceIp to {target_ip}. "
+                    f"Ensure host has 192.168.40.x on the camera NIC."
+                )
+
+            cam = MvCamera()
+            _create_handle_by_index(cam, int(refreshed["index"]))
+            ret = cam.IMV_Open()
+            if ret != IMV_OK:
+                raise ScannerProtocolError(
+                    f"IMV_Open failed after ForceIp to {target_ip} (error code {ret})"
+                )
+            persist_gige_ip(cam, target_ip, subnet_mask, gateway)
+            close_camera(cam)
+            cam = None
+
+            return {
+                "ip_before": ip_before,
+                "ip_after": target_ip,
+                "ip_reconfigured": True,
+                "device": refreshed,
+            }
+        else:
             raise ScannerProtocolError(f"IMV_Open failed before IP change (error code {ret})")
-
-        persist_gige_ip(cam, target_ip, subnet_mask, gateway)
-        close_camera(cam)
-        cam = MvCamera()
-        _create_handle_by_index(cam, index)
-
-        # ForceIp moves the device to the factory subnet immediately.
-        force_ip_address(cam, target_ip, subnet_mask, gateway)
-        logger.info(
-            "ForceIp applied (%s -> %s). Host NIC should be on %s/24 for reconnect.",
-            ip_before,
-            target_ip,
-            ".".join(target_ip.split(".")[:3]),
-        )
     finally:
-        close_camera(cam)
+        if cam is not None:
+            close_camera(cam)
 
     logger.info("Waiting %.1fs for GigE network to settle after IP change", settle_sec)
     time.sleep(settle_sec)
