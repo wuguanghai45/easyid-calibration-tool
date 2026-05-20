@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import ipaddress
 import logging
 import time
 from ctypes import byref, c_void_p
@@ -10,7 +9,7 @@ from typing import TYPE_CHECKING, Any
 
 from imv_sdk.IMVDefines import IMV_ECreateHandleMode, IMV_OK
 
-from scanner.device import _collect_local_ipv4, close_camera, enum_devices
+from scanner.device import close_camera, enum_devices, find_local_ip_for_device
 from scanner_config import (
     GIGE_IP_SETTLE_SEC,
     TARGET_DEVICE_IP,
@@ -84,23 +83,11 @@ def _find_refreshed_device(
 
 
 def _enum_after_ip_change(target_ip: str) -> list[dict[str, Any]]:
-    devices = enum_devices()
-    try:
-        factory_net = ipaddress.ip_network(f"{target_ip}/24", strict=False)
-    except ValueError:
-        return devices
-
-    for local_ip in _collect_local_ipv4():
-        try:
-            if ipaddress.ip_address(local_ip) not in factory_net:
-                continue
-        except ValueError:
-            continue
-        logger.info("Re-enumerating via unicast on local %s", local_ip)
-        unicast_devices = enum_devices(unicast_ip=local_ip)
-        if unicast_devices:
-            return unicast_devices
-    return devices
+    bind_ip = find_local_ip_for_device(target_ip)
+    if bind_ip:
+        logger.info("Re-enumerating via unicast on local %s", bind_ip)
+        return enum_devices(unicast_ip=bind_ip)
+    return enum_devices()
 
 
 def _create_handle_by_index(cam: MvCamera, index: int) -> None:

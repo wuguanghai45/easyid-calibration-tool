@@ -9,7 +9,13 @@ from typing import TYPE_CHECKING, Any
 
 from scanner.capture import capture_soft_trigger_frame
 from scanner.config_export import export_device_configs
-from scanner.device import close_camera, enum_devices, find_device, open_camera
+from scanner.device import (
+    close_camera,
+    enum_devices,
+    find_device,
+    open_camera,
+    refresh_device_via_unicast,
+)
 from scanner.feature_dump import dump_readable_features
 from scanner.gige_network import ensure_target_ip, needs_ip_update
 from scanner_config import (
@@ -98,6 +104,14 @@ class ScannerReader:
         connect_ip = ip
         if ip_meta["ip_reconfigured"]:
             connect_ip = TARGET_DEVICE_IP
+
+        if matched.get("camera_type") == "GigE":
+            matched = refresh_device_via_unicast(
+                matched,
+                serial_number=serial_number or str(matched.get("serial_number", "")) or None,
+                ip=connect_ip,
+                interface_name=interface_name,
+            )
 
         self.cam, self.device_info = open_camera(
             matched,

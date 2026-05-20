@@ -13,6 +13,7 @@ from imv_sdk.IMVDefines import (
     IMV_DeviceList,
     IMV_ECreateHandleMode,
     IMV_EInterfaceType,
+    IMV_INVALID_IP,
     IMV_OK,
     typeGigeCamera,
     typeU3vCamera,
@@ -24,6 +25,9 @@ if TYPE_CHECKING:
     from imv_sdk.IMVApi import MvCamera
 
 logger = logging.getLogger(__name__)
+
+# GigE Vision control protocol port (used only to discover routed local IPv4).
+_GIGE_CONTROL_PORT = 3956
 
 
 def _mv_camera():
@@ -97,13 +101,113 @@ def _collect_local_ipv4() -> list[str]:
     return sorted(addresses)
 
 
+def _local_ipv4_for_peer(peer_ip: str) -> str | None:
+    """Return the local IPv4 the OS would use to reach peer_ip (works on Windows multi-NIC)."""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.settimeout(0.5)
+            sock.connect((peer_ip, _GIGE_CONTROL_PORT))
+            local_ip = sock.getsockname()[0]
+    except OSError:
+        return None
+    if local_ip and local_ip != "127.0.0.1":
+        return local_ip
+    return None
+
+
+def _device_subnet(device_ip: str) -> ipaddress.IPv4Network | None:
+    try:
+        return ipaddress.ip_network(f"{device_ip}/24", strict=False)
+    except ValueError:
+        return None
+
+
+def find_local_ip_for_device(device_ip: str) -> str | None:
+    """Find a host IPv4 on the same /24 subnet as the GigE device."""
+    device_net = _device_subnet(device_ip)
+    if device_net is None:
+        return None
+
+    routed = _local_ipv4_for_peer(device_ip)
+    if routed:
+        try:
+            if ipaddress.ip_address(routed) in device_net:
+                return routed
+        except ValueError:
+            pass
+
+    for local_ip in _collect_local_ipv4():
+        try:
+            if ipaddress.ip_address(local_ip) in device_net:
+                return local_ip
+        except ValueError:
+            continue
+    return None
+
+
+def assert_gige_host_subnet(device: dict[str, Any], device_ip: str | None = None) -> str:
+    """
+    Ensure the host has an IPv4 on the device subnet (required for IMV_Open on GigE).
+
+    Returns the local bind IP to use for unicast enumeration.
+    """
+    if device.get("camera_type") != "GigE":
+        return ""
+    ip = (device_ip or str(device.get("ip_address", ""))).strip()
+    if not ip:
+        return ""
+
+    bind_ip = find_local_ip_for_device(ip)
+    if bind_ip:
+        return bind_ip
+
+    prefix = ".".join(ip.split(".")[:3])
+    local_ips = _collect_local_ipv4()
+    routed = _local_ipv4_for_peer(ip)
+    hint = (
+        f"Device is at {ip} but the host is not on the same subnet (SDK error -107 / IMV_INVALID_IP). "
+        f"Add a static IPv4 on the camera NIC, e.g. {prefix}.10 with mask 255.255.255.0, then retry."
+    )
+    details = [f"host_ipv4={', '.join(local_ips) or '(none)'}"]
+    if routed:
+        details.append(f"routed_local={routed}")
+    raise ScannerProtocolError(f"{hint} ({'; '.join(details)})")
+
+
+def refresh_device_via_unicast(
+    device: dict[str, Any],
+    *,
+    serial_number: str | None = None,
+    ip: str | None = None,
+    interface_name: str | None = None,
+) -> dict[str, Any]:
+    """Re-enumerate on the NIC that can reach the device and return the updated entry."""
+    device_ip = str(device.get("ip_address", ""))
+    bind_ip = _resolve_unicast_ip(interface_name, device_ip) or find_local_ip_for_device(device_ip)
+    if not bind_ip:
+        assert_gige_host_subnet(device, device_ip)
+        bind_ip = find_local_ip_for_device(device_ip) or ""
+
+    logger.info("Using host %s to reach device %s", bind_ip, device_ip or "unknown")
+    devices = enum_devices(unicast_ip=bind_ip)
+    return find_device(
+        devices,
+        serial_number=serial_number or str(device.get("serial_number", "")) or None,
+        ip=ip or device_ip or None,
+        interface_name=interface_name,
+    )
+
+
 def _resolve_unicast_ip(interface_hint: str | None, device_ip: str) -> str | None:
     if not interface_hint:
-        return None
+        return find_local_ip_for_device(device_ip) if device_ip else None
     needle = interface_hint.casefold()
     for local_ip in _collect_local_ipv4():
         if needle in local_ip.casefold():
             return local_ip
+    routed = _local_ipv4_for_peer(device_ip) if device_ip else None
+    if routed and needle in routed.casefold():
+        return routed
     for local_ip in _collect_local_ipv4():
         try:
             if ipaddress.ip_address(local_ip) in ipaddress.ip_network(f"{device_ip}/24", strict=False):
@@ -181,6 +285,8 @@ def open_camera(
     MvCamera = _mv_camera()
     cam = MvCamera()
     device_ip = str(device.get("ip_address", ""))
+    if device.get("camera_type") == "GigE" and device_ip:
+        assert_gige_host_subnet(device, device_ip)
     unicast_ip = _resolve_unicast_ip(interface_name, device_ip)
 
     if ip and device_ip == ip:
@@ -198,6 +304,8 @@ def open_camera(
     ret = cam.IMV_Open()
     if ret != IMV_OK:
         cam.IMV_DestroyHandle()
+        if ret == IMV_INVALID_IP and device.get("camera_type") == "GigE":
+            assert_gige_host_subnet(device, device_ip)
         raise ScannerProtocolError(f"IMV_Open failed with error code {ret}")
 
     sdk_info = IMV_DeviceInfo()
