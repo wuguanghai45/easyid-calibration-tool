@@ -89,7 +89,9 @@ python read_scanner_calibration.py --ip 192.168.40.200
 | 网关 | `192.168.40.1` |
 | 子网掩码 | `255.255.255.0` |
 
-流程：`IMV_GIGE_ForceIpAddress` → 打开设备 → 写入 `GevPersistent*` → 关闭并等待约 2s → 按序列号重新枚举后连接。USB 设备跳过此步骤。
+流程：在**当前网段**打开设备 → 写入 `GevPersistent*` → `IMV_GIGE_ForceIpAddress` → 等待约 2s → 按序列号重新枚举并连接。
+
+**注意**：`ForceIp` 后设备会立即切到 `192.168.40.200`，本机网卡需在同一网段（例如 `192.168.40.10`）。若设备原在 `192.168.30.x`，请先将 PC 网卡配置为 `192.168.40.x`，或改 IP 失败后配置网卡再执行一次（持久化参数已写入）。USB 设备跳过此步骤。
 
 常量定义见 [`scanner_config.py`](scanner_config.py)；实现见 [`scanner/gige_network.py`](scanner/gige_network.py)。
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 import logging
 import time
 from ctypes import byref, c_void_p
@@ -9,7 +10,7 @@ from typing import TYPE_CHECKING, Any
 
 from imv_sdk.IMVDefines import IMV_ECreateHandleMode, IMV_OK
 
-from scanner.device import close_camera, enum_devices
+from scanner.device import _collect_local_ipv4, close_camera, enum_devices
 from scanner_config import (
     GIGE_IP_SETTLE_SEC,
     TARGET_DEVICE_IP,
@@ -66,6 +67,42 @@ def persist_gige_ip(
             raise ScannerProtocolError(f"Set {feature} failed with error code {ret}")
 
 
+def _find_refreshed_device(
+    devices: list[dict[str, Any]],
+    *,
+    serial_number: str,
+    target_ip: str,
+) -> dict[str, Any] | None:
+    if serial_number:
+        for item in devices:
+            if item.get("serial_number") == serial_number:
+                return item
+    for item in devices:
+        if item.get("ip_address") == target_ip:
+            return item
+    return None
+
+
+def _enum_after_ip_change(target_ip: str) -> list[dict[str, Any]]:
+    devices = enum_devices()
+    try:
+        factory_net = ipaddress.ip_network(f"{target_ip}/24", strict=False)
+    except ValueError:
+        return devices
+
+    for local_ip in _collect_local_ipv4():
+        try:
+            if ipaddress.ip_address(local_ip) not in factory_net:
+                continue
+        except ValueError:
+            continue
+        logger.info("Re-enumerating via unicast on local %s", local_ip)
+        unicast_devices = enum_devices(unicast_ip=local_ip)
+        if unicast_devices:
+            return unicast_devices
+    return devices
+
+
 def _create_handle_by_index(cam: MvCamera, index: int) -> None:
     ret = cam.IMV_CreateHandle(IMV_ECreateHandleMode.modeByIndex, byref(c_void_p(index)))
     if ret != IMV_OK:
@@ -101,36 +138,43 @@ def ensure_target_ip(
     cam = MvCamera()
     try:
         _create_handle_by_index(cam, index)
-        force_ip_address(cam, target_ip, subnet_mask, gateway)
 
+        # Open while the device is still on the current subnet (reachable from the host).
         ret = cam.IMV_Open()
         if ret != IMV_OK:
-            raise ScannerProtocolError(f"IMV_Open failed after ForceIp (error code {ret})")
+            raise ScannerProtocolError(f"IMV_Open failed before IP change (error code {ret})")
 
         persist_gige_ip(cam, target_ip, subnet_mask, gateway)
+        close_camera(cam)
+        cam = MvCamera()
+        _create_handle_by_index(cam, index)
+
+        # ForceIp moves the device to the factory subnet immediately.
+        force_ip_address(cam, target_ip, subnet_mask, gateway)
+        logger.info(
+            "ForceIp applied (%s -> %s). Host NIC should be on %s/24 for reconnect.",
+            ip_before,
+            target_ip,
+            ".".join(target_ip.split(".")[:3]),
+        )
     finally:
         close_camera(cam)
 
     logger.info("Waiting %.1fs for GigE network to settle after IP change", settle_sec)
     time.sleep(settle_sec)
 
-    devices = enum_devices()
-    refreshed = None
-    if serial_number:
-        for item in devices:
-            if item.get("serial_number") == serial_number:
-                refreshed = item
-                break
-    if refreshed is None:
-        for item in devices:
-            if item.get("ip_address") == target_ip:
-                refreshed = item
-                break
+    devices = _enum_after_ip_change(target_ip)
+    refreshed = _find_refreshed_device(
+        devices,
+        serial_number=serial_number,
+        target_ip=target_ip,
+    )
 
     if refreshed is None:
         raise ScannerProtocolError(
             f"Device not found after IP change to {target_ip}. "
-            "Ensure the host NIC is on the factory subnet (e.g. 192.168.40.x/24)."
+            f"Configure the host NIC on the factory subnet (e.g. {gateway.rsplit('.', 1)[0]}.x/24) "
+            f"and retry. Persistent settings were already written."
         )
 
     return {
