@@ -140,12 +140,16 @@ class ScannerReader:
             connect_ip = str(matched.get("ip_address", "")) or connect_ip
 
         if matched.get("camera_type") == "GigE":
-            matched = refresh_device_via_unicast(
-                matched,
-                serial_number=serial_number or str(matched.get("serial_number", "")) or None,
-                ip=connect_ip,
-                interface_name=interface_name,
-            )
+            from scanner.device import assert_gige_host_subnet
+
+            assert_gige_host_subnet(matched, str(matched.get("ip_address", "")))
+            if ip_meta.get("ip_reconfigured") or ip_meta.get("ip_recovered"):
+                matched = refresh_device_via_unicast(
+                    matched,
+                    serial_number=serial_number or str(matched.get("serial_number", "")) or None,
+                    ip=connect_ip,
+                    interface_name=interface_name,
+                )
 
         self.cam, self.device_info = open_camera(
             matched,

@@ -201,18 +201,50 @@ def refresh_device_via_unicast(
 ) -> dict[str, Any]:
     """Re-enumerate on the NIC that can reach the device and return the updated entry."""
     device_ip = str(device.get("ip_address", ""))
+    sn = serial_number or str(device.get("serial_number", "")) or None
+    lookup_ip = ip or device_ip or None
+
     bind_ip = _resolve_unicast_ip(interface_name, device_ip) or find_local_ip_for_device(device_ip)
     if not bind_ip:
         assert_gige_host_subnet(device, device_ip)
         bind_ip = find_local_ip_for_device(device_ip) or ""
 
+    def _lookup(devices: list[dict[str, Any]]) -> dict[str, Any] | None:
+        if not devices:
+            return None
+        try:
+            return find_device(
+                devices,
+                serial_number=sn,
+                ip=lookup_ip,
+                interface_name=interface_name,
+            )
+        except ScannerProtocolError:
+            return None
+
     logger.info("Using host %s to reach device %s", bind_ip, device_ip or "unknown")
-    devices = enum_devices(unicast_ip=bind_ip)
-    return find_device(
-        devices,
-        serial_number=serial_number or str(device.get("serial_number", "")) or None,
-        ip=ip or device_ip or None,
-        interface_name=interface_name,
+    refreshed = _lookup(enum_devices(unicast_ip=bind_ip))
+    if refreshed is not None:
+        return refreshed
+
+    logger.info(
+        "Unicast enumeration on %s returned no devices; falling back to global IMV_EnumDevices",
+        bind_ip,
+    )
+    refreshed = _lookup(enum_devices())
+    if refreshed is not None:
+        return refreshed
+
+    if find_local_ip_for_device(device_ip):
+        logger.info(
+            "Using device entry from initial scan (index=%s, ip=%s)",
+            device.get("index"),
+            device_ip,
+        )
+        return device
+
+    raise ScannerProtocolError(
+        f"Device not found after enumeration (target SN={sn or 'n/a'}, ip={lookup_ip or 'n/a'})."
     )
 
 

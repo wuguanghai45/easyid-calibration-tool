@@ -95,7 +95,10 @@ def _enum_after_ip_change(target_ip: str) -> list[dict[str, Any]]:
     bind_ip = find_local_ip_for_device(target_ip)
     if bind_ip:
         logger.info("Re-enumerating via unicast on local %s", bind_ip)
-        return enum_devices(unicast_ip=bind_ip)
+        unicast_devices = enum_devices(unicast_ip=bind_ip)
+        if unicast_devices:
+            return unicast_devices
+        logger.info("Unicast re-enumeration returned no devices; using global enumeration")
     return enum_devices()
 
 
