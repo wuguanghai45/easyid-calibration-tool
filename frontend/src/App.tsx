@@ -1,15 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
-import {
-  runMockCalibration,
-  runRealCalibration,
-  type UiState,
-} from "./calibration";
+import { runRealCalibration, type UiState } from "./calibration";
 
 const IDLE_HINT = "输入车架号后开始标定。";
 
 export default function App() {
   const [vin, setVin] = useState("");
-  const [simulateFailure, setSimulateFailure] = useState(false);
   const [uiState, setUiState] = useState<UiState>("idle");
   const [resultText, setResultText] = useState("待开始");
   const [steps, setSteps] = useState<string[]>([]);
@@ -38,9 +33,8 @@ export default function App() {
     setResultText("标定中");
 
     try {
-      const outcome = simulateFailure
-        ? await runMockCalibration(2)
-        : await runRealCalibration();
+      const outcome = await runRealCalibration();
+
 
       setSteps(outcome.steps);
 
@@ -93,16 +87,6 @@ export default function App() {
       <button type="button" disabled={busy} onClick={runCalibration}>
         开始标定
       </button>
-
-      <label className="demo">
-        <input
-          type="checkbox"
-          checked={simulateFailure}
-          disabled={busy}
-          onChange={(e) => setSimulateFailure(e.target.checked)}
-        />
-        模拟失败
-      </label>
 
       <section className="status" aria-live="polite">
         <p className="result">{resultText}</p>

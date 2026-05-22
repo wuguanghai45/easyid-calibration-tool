@@ -122,34 +122,3 @@ export async function runRealCalibration(): Promise<CalibrationOutcome> {
     hint: formatCalibrationHint(scan, passed),
   };
 }
-
-export async function runMockCalibration(failAtStepIndex: number): Promise<CalibrationOutcome> {
-  const steps: string[] = [];
-  for (let i = 0; i < STEP_LABELS.length; i += 1) {
-    await sleep(900);
-    if (i === failAtStepIndex) {
-      return {
-        ok: false,
-        steps,
-        hint: "流程中断，请检查车辆连接与配置。",
-      };
-    }
-    steps.push(STEP_LABELS[i]);
-  }
-
-  const mockScan: ScanResult = {
-    x_offset: 0,
-    y_offset: 0,
-    theta: 0,
-    theta_deg: 0,
-    code: "MOCK",
-    ts: Date.now() / 1000,
-  };
-
-  return {
-    ok: true,
-    steps,
-    scan: mockScan,
-    hint: "相机外参标定完成。",
-  };
-}

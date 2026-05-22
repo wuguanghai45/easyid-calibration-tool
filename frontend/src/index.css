@@ -113,21 +113,6 @@ button:disabled {
   opacity: 0.72;
 }
 
-.demo {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-top: 14px;
-  color: var(--muted);
-  font-size: 14px;
-}
-
-.demo input[type="checkbox"] {
-  width: 18px;
-  height: 18px;
-  accent-color: #101828;
-}
-
 .status {
   min-height: 130px;
   margin-top: 24px;
