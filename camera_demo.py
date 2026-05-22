@@ -46,7 +46,7 @@ def print_scan_result(item: dict[str, str | int]) -> None:
     print(
         f"[扫码结果] x偏移量: {item['x_offset']}, "
         f"y偏移量: {item['y_offset']}, "
-        f"角度: {theta} (华睿[0,3599], 顺时针, {huaray_theta_to_degrees(theta):.1f}°), "
+        f"角度: {theta}, {huaray_theta_to_degrees(theta):.1f}°), "
         f"条码: {item['code']}"
     )
 
