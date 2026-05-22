@@ -1,10 +1,26 @@
 import logging
+import os
 import random
 import socket
 import struct
+import sys
 import threading
 import time
 from enum import Enum
+
+
+def _use_color():
+    if os.environ.get("NO_COLOR"):
+        return False
+    if not hasattr(sys.stdout, "isatty") or not sys.stdout.isatty():
+        return False
+    if sys.platform == "win32":
+        return bool(
+            os.environ.get("WT_SESSION")
+            or os.environ.get("ANSICON")
+            or os.environ.get("TERM") == "xterm"
+        )
+    return True
 
 
 def setup_logger():
@@ -24,7 +40,10 @@ def setup_logger():
             return f"{color}{msg}{self.RESET}"
 
     handler = logging.StreamHandler()
-    formatter = ColorFormatter("%(asctime)s [%(levelname)s] %(message)s")
+    fmt = "%(asctime)s [%(levelname)s] %(message)s"
+    formatter = (
+        ColorFormatter(fmt) if _use_color() else logging.Formatter(fmt)
+    )
     handler.setFormatter(formatter)
     logger = logging.getLogger("camera")
     logger.setLevel(logging.INFO)
@@ -65,11 +84,33 @@ def send_and_receive_on_60088():
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     sock.bind((local_ip, STREAM_PORT))
+    sock.settimeout(5.0)
+    logger.info(f"Stream listener ready on {local_ip}:{STREAM_PORT}")
+
     current_block_id = None
+    total_packets = 0
+    complete_count = 0
+    last_status_log = time.monotonic()
+    STATUS_INTERVAL = 10.0
 
     try:
         while True:
-            recv_data, _ = sock.recvfrom(65535)
+            try:
+                recv_data, addr = sock.recvfrom(65535)
+            except socket.timeout:
+                now = time.monotonic()
+                if now - last_status_log >= STATUS_INTERVAL:
+                    logger.info(
+                        f"Waiting for AGV data on {local_ip}:{STREAM_PORT} "
+                        f"(packets={total_packets}, complete={complete_count})"
+                    )
+                    last_status_log = now
+                continue
+
+            total_packets += 1
+            if total_packets == 1:
+                logger.info(f"First stream packet from {addr[0]}:{addr[1]}")
+
             block_id = struct.unpack(">H", recv_data[2:4])[0]
             packet_id = int.from_bytes(recv_data[5:8], byteorder="big")
 
@@ -81,6 +122,9 @@ def send_and_receive_on_60088():
             current_block_id = block_id
             start_index = AGV_PAYLOAD_OFFSET
 
+            if len(recv_data) < start_index + 4:
+                continue
+
             agv_status = int.from_bytes(
                 recv_data[start_index : start_index + 4],
                 byteorder="little",
@@ -88,6 +132,8 @@ def send_and_receive_on_60088():
             )
             if agv_status != AGV_STATUS_COMPLETE:
                 continue
+
+            complete_count += 1
 
             # Skip agv_time (4) and agv_error_code (4)
             start_index += 12
@@ -139,11 +185,21 @@ def ip_to_int(ip_address):
 
 
 def heartbeat_loop():
+    fail_streak = 0
     while True:
         packet = create_packet_dynamic(
             {CameraRegister.GEV_CCP_REG.value: None}, GVCP_READREG_CMD
         )
-        send_packet(packet, target_ip, target_port, source_port)
+        ok = send_packet(packet, target_ip, target_port, source_port)
+        if ok:
+            fail_streak = 0
+        else:
+            fail_streak += 1
+            if fail_streak == 1 or fail_streak % 10 == 0:
+                logger.warning(
+                    f"Camera heartbeat failed ({fail_streak}x), "
+                    f"check {target_ip}:{target_port} and network"
+                )
         time.sleep(1)
 
 
@@ -164,7 +220,7 @@ def set_zero_size_image_output():
 
 def start_acquisition():
     packet = create_packet_dynamic({CameraRegister.ACQUISITION_START.value: 1})
-    send_packet(packet, target_ip, target_port, source_port)
+    return send_packet(packet, target_ip, target_port, source_port)
 
 
 def disconnect():
@@ -175,6 +231,11 @@ def disconnect():
 
 
 def connect():
+    logger.info(
+        f"Connecting camera {target_ip}:{target_port} "
+        f"(local {local_ip}, GVCP port {source_port}, stream {STREAM_PORT})"
+    )
+    ok = True
     control_switchover_key = 0x0000
     control_switchover_enable = 0
     control_access = 1
@@ -195,7 +256,7 @@ def connect():
     )
     value = int.from_bytes(binary_data, byteorder="big")
     packet = create_packet_dynamic({0x00000A00: value})
-    send_packet(packet, target_ip, target_port, source_port)
+    ok &= send_packet(packet, target_ip, target_port, source_port)
 
     for address, reg_value in (
         (0x00000938, 3000),
@@ -207,7 +268,9 @@ def connect():
         (0x00000D04, 0x400005A4),
     ):
         packet = create_packet_dynamic({address: reg_value})
-        send_packet(packet, target_ip, target_port, source_port)
+        if not send_packet(packet, target_ip, target_port, source_port):
+            logger.error(f"Failed to write register 0x{address:08X}")
+            ok = False
 
     ip = ip_to_int(local_ip)
     packet = create_packet_dynamic(
@@ -217,7 +280,16 @@ def connect():
         },
     )
     for _ in range(3):
-        send_packet(packet, target_ip, target_port, source_port)
+        ok &= send_packet(packet, target_ip, target_port, source_port)
+
+    if ok:
+        logger.info("Camera connected and stream destination configured.")
+    else:
+        logger.error(
+            "Camera connect incomplete — verify IP and that no other app "
+            "controls the camera."
+        )
+    return ok
 
 
 def create_packet_dynamic(data_map=None, command_type=GVCP_WRITEREG_CMD):
@@ -319,20 +391,34 @@ def send_packet(packet, target_ip, target_port, source_port=None, timeout=1):
 
 if __name__ == "__main__":
     try:
-        connect()
+        if not connect():
+            raise SystemExit(1)
+
+        logger.info("Waiting 2s for camera to apply settings...")
         time.sleep(2)
 
         if not set_zero_size_image_output():
             logger.error("Failed to set zero size image output.")
             raise SystemExit(1)
+        logger.info("Zero-size image output configured.")
 
         threading.Thread(target=send_and_receive_on_60088, daemon=True).start()
-        start_acquisition()
+        time.sleep(0.2)
+
+        if not start_acquisition():
+            logger.error("Failed to start acquisition.")
+            raise SystemExit(1)
+        logger.info("Acquisition started.")
+
         threading.Thread(target=heartbeat_loop, daemon=True).start()
+        logger.info(
+            "Running. Place a code in view; Ctrl+C to stop. "
+            "Status updates every 10s if no AGV result yet."
+        )
 
         while True:
             if not set_zero_size_image_output():
-                logger.error("Failed to set zero size image output.")
+                logger.error("Failed to refresh zero size image output.")
             time.sleep(2)
     except KeyboardInterrupt:
         logger.info("Shutting down.")
