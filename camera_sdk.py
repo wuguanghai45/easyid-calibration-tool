@@ -40,6 +40,9 @@ local_ip = "192.168.40.12"
 target_port = 3956
 source_port = random.randint(60000, 65535)
 
+_gvcp_sock = None
+_gvcp_lock = threading.Lock()
+
 GVCP_READREG_CMD = 0x0080
 GVCP_WRITEREG_CMD = 0x0082
 
@@ -60,6 +63,7 @@ class CameraRegister(Enum):
 def send_and_receive_on_60088():
     """Listen on STREAM_PORT for AGV correction data from the camera."""
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     sock.bind((local_ip, STREAM_PORT))
     current_block_id = None
 
@@ -252,45 +256,65 @@ def create_packet_dynamic(data_map=None, command_type=GVCP_WRITEREG_CMD):
     return header + payload
 
 
-def send_packet(packet, target_ip, target_port, source_port=None, timeout=1):
+def _get_gvcp_socket(bind_port):
+    """Reuse one UDP socket for all GVCP traffic (avoids WinError 10048)."""
+    global _gvcp_sock
+    if _gvcp_sock is not None:
+        return _gvcp_sock
+
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    try:
-        if source_port is not None:
-            sock.bind(("", source_port))
-        sock.settimeout(timeout)
-        sock.sendto(packet, (target_ip, target_port))
-        response, addr = sock.recvfrom(4096)
-        logger.debug(f"Received response from {addr}: {response.hex()}")
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.bind(("", bind_port))
+    _gvcp_sock = sock
+    return _gvcp_sock
 
-        if len(response) < 2:
-            logger.error("Response too short to determine success.")
+
+def close_gvcp_socket():
+    global _gvcp_sock
+    if _gvcp_sock is not None:
+        _gvcp_sock.close()
+        _gvcp_sock = None
+
+
+def send_packet(packet, target_ip, target_port, source_port=None, timeout=1):
+    with _gvcp_lock:
+        try:
+            if source_port is not None:
+                sock = _get_gvcp_socket(source_port)
+            else:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.settimeout(timeout)
+            sock.sendto(packet, (target_ip, target_port))
+            response, addr = sock.recvfrom(4096)
+            logger.debug(f"Received response from {addr}: {response.hex()}")
+
+            if len(response) < 2:
+                logger.error("Response too short to determine success.")
+                return False
+
+            status = struct.unpack(">H", response[0:2])[0]
+            ack_knowledge = struct.unpack(">H", response[2:4])[0]
+            if status != 0:
+                logger.error(
+                    f"Command failed with status: {status}, "
+                    f"ack_knowledge: {ack_knowledge}"
+                )
+                return False
+
+            if ack_knowledge in (
+                GVCP_READREG_CMD + 0x0001,
+                GVCP_WRITEREG_CMD + 0x0001,
+            ):
+                return True
+
+            logger.error(f"Unexpected ack_knowledge: {ack_knowledge}")
             return False
-
-        status = struct.unpack(">H", response[0:2])[0]
-        ack_knowledge = struct.unpack(">H", response[2:4])[0]
-        if status != 0:
-            logger.error(
-                f"Command failed with status: {status}, "
-                f"ack_knowledge: {ack_knowledge}"
-            )
+        except socket.timeout:
+            logger.error("No response received: Timeout occurred.")
             return False
-
-        if ack_knowledge in (
-            GVCP_READREG_CMD + 0x0001,
-            GVCP_WRITEREG_CMD + 0x0001,
-        ):
-            return True
-
-        logger.error(f"Unexpected ack_knowledge: {ack_knowledge}")
-        return False
-    except socket.timeout:
-        logger.error("No response received: Timeout occurred.")
-        return False
-    except Exception as e:
-        logger.error(f"Error: {e}")
-        return False
-    finally:
-        sock.close()
+        except Exception as e:
+            logger.error(f"Error: {e}")
+            return False
 
 
 if __name__ == "__main__":
@@ -314,3 +338,4 @@ if __name__ == "__main__":
         logger.info("Shutting down.")
     finally:
         disconnect()
+        close_gvcp_socket()
