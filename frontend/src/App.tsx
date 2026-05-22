@@ -61,6 +61,10 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [previewKey, setPreviewKey] = useState(0);
   const wsRef = useRef<WebSocket | null>(null);
+  const continuousRef = useRef(false);
+  const frameNoRef = useRef("");
+  continuousRef.current = continuous;
+  frameNoRef.current = frameNo;
 
   const refreshDevices = useCallback(async () => {
     const res = await api.listDevices();
@@ -155,22 +159,19 @@ export default function App() {
     await refreshLogs();
   };
 
-  const addRecord = useCallback(
-    (scan: ScanResult) => {
-      const rec: CalibrationRecord = {
-        key: `${scan.ts}-${scan.code}`,
-        time: formatTime(scan.ts),
-        frameNo: frameNo || "-",
-        datamatrix: scan.code,
-        deltaX: scan.x_offset,
-        deltaY: scan.y_offset,
-        deltaTheta: scan.theta_deg,
-        status: "OK",
-      };
-      setRecords((prev) => [rec, ...prev].slice(0, 500));
-    },
-    [frameNo]
-  );
+  const appendRecord = useCallback((scan: ScanResult) => {
+    const rec: CalibrationRecord = {
+      key: `${scan.ts}-${scan.code}`,
+      time: formatTime(scan.ts),
+      frameNo: frameNoRef.current || "-",
+      datamatrix: scan.code,
+      deltaX: scan.x_offset,
+      deltaY: scan.y_offset,
+      deltaTheta: scan.theta_deg,
+      status: "OK",
+    };
+    setRecords((prev) => [rec, ...prev].slice(0, 500));
+  }, []);
 
   useEffect(() => {
     refreshDevices();
@@ -186,20 +187,42 @@ export default function App() {
       wsRef.current = null;
       return;
     }
+
+    let closing = false;
     const ws = new WebSocket(api.scanWebSocketUrl());
     wsRef.current = ws;
+
     ws.onmessage = (ev) => {
-      const data = JSON.parse(ev.data) as ScanResult;
-      if (data.type === "ping") return;
-      setCurrentScan(data);
-      if (continuous) addRecord(data);
+      try {
+        const data = JSON.parse(ev.data) as ScanResult;
+        if (data.type === "ping") return;
+        setCurrentScan(data);
+        if (continuousRef.current) {
+          appendRecord(data);
+        }
+      } catch {
+        /* ignore malformed payloads */
+      }
     };
-    ws.onerror = () => message.warning("扫码 WebSocket 连接异常");
+
+    ws.onerror = () => {
+      if (!closing) {
+        message.warning("扫码 WebSocket 连接异常，请确认设备已连接且 TCP 端口可达");
+      }
+    };
+
+    ws.onclose = (ev) => {
+      if (!closing && ev.code !== 1000) {
+        message.warning("扫码 WebSocket 已断开");
+      }
+    };
+
     return () => {
+      closing = true;
       ws.close();
       wsRef.current = null;
     };
-  }, [connected, continuous, addRecord]);
+  }, [connected, appendRecord]);
 
   const filteredRecords = useMemo(() => {
     if (!searchFrame.trim()) return records;
@@ -228,7 +251,7 @@ export default function App() {
     const res = await api.getLatestScan();
     if (res.scan) {
       setCurrentScan(res.scan);
-      addRecord(res.scan);
+      appendRecord(res.scan);
       message.success("已锁定当前扫码结果");
     } else {
       message.warning("暂无扫码数据，请确保 TCP 结果流已连接");
@@ -363,12 +386,26 @@ export default function App() {
             </Button>
             <Button
               icon={<PlayCircleOutlined />}
-              onClick={() => setContinuous(true)}
+              onClick={() => {
+                if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+                  message.warning("WebSocket 未连接，请确认设备已连接");
+                  return;
+                }
+                setContinuous(true);
+                message.success("连续扫码已开启，新结果将自动写入记录");
+              }}
               disabled={!connected || continuous}
             >
               连续扫码
             </Button>
-            <Button icon={<StopOutlined />} onClick={() => setContinuous(false)} disabled={!continuous}>
+            <Button
+              icon={<StopOutlined />}
+              onClick={() => {
+                setContinuous(false);
+                message.info("已停止连续扫码");
+              }}
+              disabled={!continuous}
+            >
               停止
             </Button>
           </Space>
@@ -401,7 +438,7 @@ export default function App() {
             size="large"
             style={{ marginTop: 16 }}
             disabled={!connected || !currentScan}
-            onClick={() => currentScan && addRecord(currentScan)}
+            onClick={() => currentScan && appendRecord(currentScan)}
           >
             绑定当前校准结果
           </Button>
