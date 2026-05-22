@@ -105,7 +105,8 @@ export default function App() {
         tcp_port: 3000,
       });
       if (!res.ok) {
-        message.error(res.error || "连接失败");
+        const hint = "hint" in res && typeof res.hint === "string" ? res.hint : "";
+        message.error(hint ? `${res.error || "连接失败"} — ${hint}` : res.error || "连接失败");
         return;
       }
       setConnected(true);

@@ -17,6 +17,18 @@ from web.session import get_session
 
 FRONTEND_DIST = Path(__file__).resolve().parent.parent / "frontend" / "dist"
 
+
+def _connect_hint(error: str) -> str:
+    if "-101" in error or "error code -101" in error:
+        return (
+            "Close other programs using the camera (e.g. MVS), ensure the PC NIC is on the "
+            "same subnet as the device, wait a few seconds and connect again."
+        )
+    if "-107" in error or "subnet" in error.lower():
+        return "Add a static IPv4 on the camera NIC in the same subnet as the device (e.g. x.x.x.10/24)."
+    return ""
+
+
 app = FastAPI(title="DataMatrix Calibration Bench", version="1.0.0")
 app.add_middleware(
     CORSMiddleware,
@@ -74,7 +86,7 @@ def api_connect(body: ConnectRequest) -> dict[str, Any]:
         return {"ok": True, **result}
     except ScannerProtocolError as exc:
         session.logs.add("error", str(exc))
-        return {"ok": False, "error": str(exc)}
+        return {"ok": False, "error": str(exc), "hint": _connect_hint(str(exc))}
     except Exception as exc:
         session.logs.add("error", f"Connect failed: {exc}")
         return {"ok": False, "error": str(exc)}

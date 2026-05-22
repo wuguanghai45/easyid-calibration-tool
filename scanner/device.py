@@ -11,8 +11,10 @@ from typing import TYPE_CHECKING, Any
 from imv_sdk.IMVDefines import (
     IMV_DeviceInfo,
     IMV_DeviceList,
+    IMV_ECameraAccessPermission,
     IMV_ECreateHandleMode,
     IMV_EInterfaceType,
+    IMV_ERROR,
     IMV_INVALID_IP,
     IMV_OK,
     typeGigeCamera,
@@ -325,6 +327,43 @@ def find_device(
     return matched[0]
 
 
+def imv_error_hint(code: int) -> str:
+    """Human-readable hint for common IMV SDK return codes."""
+    hints = {
+        IMV_ERROR: (
+            "generic SDK error (often: device busy, wrong NIC, or stale enumeration index). "
+            "Close MVS/other camera apps, verify PC IP is on the same subnet as the device, "
+            "wait a few seconds and retry."
+        ),
+        IMV_INVALID_IP: "host IP subnet does not match the GigE device",
+        -106: "camera resource invalid (device may be in use)",
+        -111: "property access denied",
+    }
+    extra = hints.get(code, "")
+    return f"error code {code}" + (f" — {extra}" if extra else "")
+
+
+def _destroy_handle(cam: "MvCamera") -> None:
+    if cam.handle:
+        cam.IMV_DestroyHandle()
+
+
+def _create_handle(cam: "MvCamera", mode: int, param: bytes | int) -> int:
+    if mode == IMV_ECreateHandleMode.modeByIndex:
+        return cam.IMV_CreateHandle(mode, byref(c_void_p(int(param))))
+    return cam.IMV_CreateHandle(mode, param)
+
+
+def _open_camera_handle(cam: "MvCamera") -> int:
+    ret = cam.IMV_Open()
+    if ret == IMV_OK:
+        return ret
+    ret2 = cam.IMV_OpenEx(IMV_ECameraAccessPermission.accessPermissionControl)
+    if ret2 == IMV_OK:
+        return ret2
+    return cam.IMV_OpenEx(IMV_ECameraAccessPermission.accessPermissionExclusive)
+
+
 def open_camera(
     device: dict[str, Any],
     *,
@@ -335,28 +374,48 @@ def open_camera(
     MvCamera = _mv_camera()
     cam = MvCamera()
     device_ip = str(device.get("ip_address", ""))
+    connect_ip = (ip or device_ip).strip()
     if device.get("camera_type") == "GigE" and device_ip:
         assert_gige_host_subnet(device, device_ip)
     unicast_ip = _resolve_unicast_ip(interface_name, device_ip)
 
-    if ip and device_ip == ip:
-        ret = cam.IMV_CreateHandle(IMV_ECreateHandleMode.modeByIPAddress, ip.encode("utf-8"))
-        if ret != IMV_OK:
-            index = int(device["index"])
-            ret = cam.IMV_CreateHandle(IMV_ECreateHandleMode.modeByIndex, byref(c_void_p(index)))
-    else:
-        index = int(device["index"])
-        ret = cam.IMV_CreateHandle(IMV_ECreateHandleMode.modeByIndex, byref(c_void_p(index)))
+    handle_attempts: list[tuple[int, bytes | int, str]] = []
+    if connect_ip and device.get("camera_type") == "GigE":
+        handle_attempts.append(
+            (IMV_ECreateHandleMode.modeByIPAddress, connect_ip.encode("utf-8"), f"IP:{connect_ip}")
+        )
+    camera_key = str(device.get("camera_key", "")).strip()
+    if camera_key:
+        handle_attempts.append(
+            (IMV_ECreateHandleMode.modeByCameraKey, camera_key.encode("utf-8"), f"key:{camera_key[:24]}")
+        )
+    handle_attempts.append(
+        (IMV_ECreateHandleMode.modeByIndex, int(device.get("index", 0)), f"index:{device.get('index')}")
+    )
 
-    if ret != IMV_OK:
-        raise ScannerProtocolError(f"IMV_CreateHandle failed with error code {ret}")
+    last_create_ret = IMV_ERROR
+    last_open_ret = IMV_ERROR
+    used_mode = ""
 
-    ret = cam.IMV_Open()
-    if ret != IMV_OK:
-        cam.IMV_DestroyHandle()
-        if ret == IMV_INVALID_IP and device.get("camera_type") == "GigE":
+    for mode, param, label in handle_attempts:
+        _destroy_handle(cam)
+        last_create_ret = _create_handle(cam, mode, param)
+        if last_create_ret != IMV_OK:
+            logger.debug("IMV_CreateHandle(%s) failed: %d", label, last_create_ret)
+            continue
+        last_open_ret = _open_camera_handle(cam)
+        if last_open_ret == IMV_OK:
+            used_mode = label
+            break
+        logger.debug("IMV_Open(%s) failed: %d", label, last_open_ret)
+        _destroy_handle(cam)
+
+    if last_open_ret != IMV_OK:
+        if last_open_ret == IMV_INVALID_IP and device.get("camera_type") == "GigE":
             assert_gige_host_subnet(device, device_ip)
-        raise ScannerProtocolError(f"IMV_Open failed with error code {ret}")
+        raise ScannerProtocolError(f"IMV_Open failed ({imv_error_hint(last_open_ret)})")
+
+    logger.info("Opened device via %s", used_mode or "unknown")
 
     sdk_info = IMV_DeviceInfo()
     ret = cam.IMV_GetDeviceInfo(sdk_info)

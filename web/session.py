@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -62,7 +63,10 @@ class DeviceSession:
         start_preview: bool = True,
         start_tcp: bool = True,
     ) -> dict[str, Any]:
-        self.disconnect()
+        was_connected = self.reader.connected
+        self.disconnect(log=False)
+        if was_connected:
+            time.sleep(0.5)
         self._tcp_port = tcp_port
 
         with self._imv_lock:
@@ -91,13 +95,15 @@ class DeviceSession:
             "tcp_port": tcp_port,
         }
 
-    def disconnect(self) -> None:
+    def disconnect(self, *, log: bool = True) -> None:
         self._stop_tcp()
         self._stop_preview()
+        was_connected = self.reader.connected
         with self._imv_lock:
-            if self.reader.connected:
+            if was_connected:
                 self.reader.disconnect()
-        self._log("info", "Device disconnected")
+        if log and was_connected:
+            self._log("info", "Device disconnected")
 
     def get_device_status(self) -> dict[str, Any]:
         return {
