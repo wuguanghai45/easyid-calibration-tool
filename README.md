@@ -63,6 +63,47 @@ pip install -r requirements.txt
 
 `Pillow` 用于在 SDK 存图失败时将 Mono8 保存为 PNG；JPEG 帧通常由 `IMV_SaveImageToFile` 直接保存为 `.jpg`。
 
+## Web 校准台
+
+在 **Windows**（或已安装 MVSDK 的 Linux）工控机上运行 FastAPI 后端，浏览器访问校准界面：
+
+- **IMV SDK**：设备发现、GenICam 配置读写、MJPEG 实时预览
+- **TCP :3000**：实时扫码偏移 `(x;y;θ;code)`，经 WebSocket 推送到页面
+
+### 启动后端
+
+```bash
+pip install -r requirements.txt
+python run_web.py --host 0.0.0.0 --port 8080
+```
+
+### 开发前端（可选）
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+Vite 开发服务器会将 `/api` 代理到 `http://127.0.0.1:8080`。
+
+### 生产构建（单进程）
+
+```bash
+cd frontend && npm install && npm run build
+cd .. && python run_web.py
+```
+
+构建产物在 `frontend/dist/`，由 FastAPI 静态挂载；API 路径前缀为 `/api`。
+
+| API | 说明 |
+|-----|------|
+| `GET /api/devices` | 枚举设备 |
+| `POST /api/connect` | 连接 IMV + 启动 TCP/预览 |
+| `GET /api/config` / `PUT /api/config` | 读写曝光、增益等 |
+| `GET /api/stream/mjpeg` | 实时预览流 |
+| `WS /api/ws/scan` | 实时扫码数据 |
+
 ## 使用方法
 
 ### 基本命令
@@ -192,6 +233,9 @@ flowchart LR
 ```text
 easyid-calibration-tool/
 ├── read_scanner_calibration.py   # CLI 入口
+├── run_web.py                      # Web 服务入口
+├── web/                            # FastAPI 应用
+├── frontend/                       # React 校准台 UI
 ├── scanner_reader.py             # 采集流程编排
 ├── scanner/                      # IMV 业务模块
 ├── imv_sdk/                      # MVSDK Python 封装
