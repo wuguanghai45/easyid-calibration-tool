@@ -19,7 +19,6 @@ const CONFIG_DETAIL_KEYS: Record<string, string> = {
   gain: "增益",
   timeout_ms: "超时",
   trigger_mode: "触发模式",
-  trigger_source: "触发源",
 };
 
 export type UiState = "idle" | "running" | "success" | "failure";
@@ -65,13 +64,10 @@ export function buildScanDetail(device: DeviceListItem): string | undefined {
   ]);
 }
 
-export function buildBindDetail(vin: string, device: DeviceListItem): string | undefined {
+export function buildBindDetail(device: DeviceListItem): string | undefined {
   const parts: Array<string | undefined> = [];
   if (device.serial_number) {
-    parts.push(`SN ${device.serial_number}`);
-  }
-  if (vin) {
-    parts.push(`车架号 ${vin}`);
+    parts.push(`扫码器SN ${device.serial_number}`);
   }
   if (device.ip_reconfigured && device.ip_after) {
     const change =
@@ -124,7 +120,6 @@ export function buildFeishuDetail(res: {
   }
   return joinDetail([
     res.theta != null ? `θ=${res.theta}°` : undefined,
-    res.record_id ? `record_id=${res.record_id}` : undefined,
     res.vin ? `S/N ${res.vin}` : undefined,
   ]);
 }
@@ -174,7 +169,6 @@ export async function waitForScan(
 }
 
 export async function runRealCalibration(
-  vin: string,
   onProgress?: (progress: CalibrationProgress) => void
 ): Promise<CalibrationOutcome> {
   const steps: FlowStep[] = [];
@@ -223,7 +217,7 @@ export async function runRealCalibration(
   }
 
   const connectedDevice = connectRes.device ?? device;
-  steps.push(flowStep("bind", STEP_LABELS[1], buildBindDetail(vin, connectedDevice)));
+  steps.push(flowStep("bind", STEP_LABELS[1], buildBindDetail(connectedDevice)));
   notify(2);
 
   const configRes = await api.getConfig();

@@ -94,7 +94,7 @@ export default function App() {
     const frameNo = vin.trim();
 
     try {
-      const outcome = await runRealCalibration(frameNo, applyProgress);
+      const outcome = await runRealCalibration(applyProgress);
 
       setSteps(outcome.steps);
       setActiveStepIndex(null);
