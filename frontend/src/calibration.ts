@@ -39,6 +39,19 @@ function joinDetail(parts: Array<string | undefined | null>): string | undefined
   return filtered.length > 0 ? filtered.join("，") : undefined;
 }
 
+const FAILED_PARAMS_DISPLAY_MAX = 8;
+
+function formatFailedParams(failedParams: string[]): string {
+  if (failedParams.length === 0) {
+    return "";
+  }
+  if (failedParams.length <= FAILED_PARAMS_DISPLAY_MAX) {
+    return failedParams.join(", ");
+  }
+  const shown = failedParams.slice(0, FAILED_PARAMS_DISPLAY_MAX).join(", ");
+  return `${shown} 等 ${failedParams.length} 项`;
+}
+
 function flowStep(id: string, title: string, detail?: string): FlowStep {
   return detail ? { id, title, detail } : { id, title };
 }
@@ -83,7 +96,7 @@ export function buildBindDetail(device: DeviceListItem): string | undefined {
 
 export function buildConfigDetail(
   fields: ConfigField[],
-  failedParamCount = 0
+  failedParams: string[] = []
 ): string | undefined {
   const highlights: string[] = [];
   for (const field of fields) {
@@ -94,8 +107,9 @@ export function buildConfigDetail(
     highlights.push(`${label}=${field.value}`);
   }
 
-  if (failedParamCount > 0) {
-    highlights.push(`部分参数未生效: ${failedParamCount} 项`);
+  const failedSummary = formatFailedParams(failedParams);
+  if (failedSummary) {
+    highlights.push(`部分参数未生效: ${failedSummary}`);
   }
 
   if (highlights.length > 0) {
@@ -104,8 +118,8 @@ export function buildConfigDetail(
   if (fields.length > 0) {
     return `已导入 ${fields.length} 项配置`;
   }
-  if (failedParamCount > 0) {
-    return `部分参数未生效: ${failedParamCount} 项`;
+  if (failedSummary) {
+    return `部分参数未生效: ${failedSummary}`;
   }
   return "配置已导入";
 }
@@ -238,12 +252,11 @@ export async function runRealCalibration(
     };
   }
 
-  const failedCount = configRes.failed_params?.length ?? 0;
   steps.push(
     flowStep(
       "config",
       STEP_LABELS[2],
-      buildConfigDetail(configRes.fields ?? [], failedCount)
+      buildConfigDetail(configRes.fields ?? [], configRes.failed_params ?? [])
     )
   );
   notify(3);
