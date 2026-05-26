@@ -161,6 +161,7 @@ body.failure .progress-fill {
 }
 
 .progress-steps {
+  --progress-marker-size: 16px; /* 12px dot + 2px border each side */
   display: flex;
   justify-content: space-between;
   gap: 4px;
@@ -170,6 +171,7 @@ body.failure .progress-fill {
 }
 
 .progress-steps li {
+  position: relative;
   flex: 1;
   min-width: 0;
   display: flex;
@@ -179,13 +181,32 @@ body.failure .progress-fill {
   text-align: center;
 }
 
+/* Connector between step markers (center to center of adjacent steps). */
+.progress-steps li:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  top: calc(var(--progress-marker-size) / 2 - 1px);
+  left: calc(50% + var(--progress-marker-size) / 2);
+  right: calc(-50% + var(--progress-marker-size) / 2);
+  height: 2px;
+  background: #e2e8f0;
+  z-index: 0;
+}
+
+.progress-steps li.done:not(:last-child)::after {
+  background: #12965d;
+}
+
 .progress-step-marker {
+  position: relative;
+  z-index: 1;
   width: 12px;
   height: 12px;
   border-radius: 50%;
   border: 2px solid #cbd5e1;
   background: #fff;
   flex-shrink: 0;
+  box-sizing: content-box;
   transition:
     background 0.25s ease,
     border-color 0.25s ease;
