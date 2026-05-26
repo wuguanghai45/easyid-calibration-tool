@@ -57,6 +57,19 @@ export async function getLatestScan() {
   return request<{ ok: boolean; scan: ScanResult | null }>("/scan/latest");
 }
 
+export async function syncCameraOffset(vin: string, theta: number) {
+  return request<{
+    ok: boolean;
+    record_id?: string;
+    vin?: string;
+    theta?: number;
+    error?: string;
+  }>("/feishu/camera-offset", {
+    method: "POST",
+    body: JSON.stringify({ vin, theta }),
+  });
+}
+
 export async function getLogs(limit = 200) {
   return request<{ logs: LogEntry[] }>(`/logs?limit=${limit}`);
 }

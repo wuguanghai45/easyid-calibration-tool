@@ -14,6 +14,7 @@ class FeishuSettings:
     app_secret: str
     wiki_token: str
     table_id: str
+    view_id: str
     obj_type: str = "wiki"
 
     @classmethod
@@ -22,6 +23,7 @@ class FeishuSettings:
         app_secret = os.environ.get("FEISHU_APP_SECRET", "").strip()
         wiki_token = os.environ.get("FEISHU_WIKI_TOKEN", "").strip()
         table_id = os.environ.get("FEISHU_TABLE_ID", "").strip()
+        view_id = os.environ.get("FEISHU_VIEW_ID", "").strip()
         obj_type = os.environ.get("FEISHU_OBJ_TYPE", "wiki").strip() or "wiki"
 
         missing = [
@@ -31,6 +33,7 @@ class FeishuSettings:
                 ("FEISHU_APP_SECRET", app_secret),
                 ("FEISHU_WIKI_TOKEN", wiki_token),
                 ("FEISHU_TABLE_ID", table_id),
+                ("FEISHU_VIEW_ID", view_id),
             )
             if not value
         ]
@@ -46,6 +49,7 @@ class FeishuSettings:
             app_secret=app_secret,
             wiki_token=wiki_token,
             table_id=table_id,
+            view_id=view_id,
             obj_type=obj_type,
         )
 

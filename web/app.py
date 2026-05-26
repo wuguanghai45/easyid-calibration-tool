@@ -12,6 +12,9 @@ from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from feishu.config import FeishuSettings, load_dotenv_if_present
+from feishu.errors import FeishuApiError
+from feishu.update_camera_offset import run_update
 from scanner_utils import ScannerProtocolError
 from web.session import get_session
 
@@ -53,8 +56,14 @@ class ConfigUpdateRequest(BaseModel):
     persist: bool = True
 
 
+class FeishuCameraOffsetRequest(BaseModel):
+    vin: str = Field(..., min_length=1, description="Frame number; matches Bitable column S/N*")
+    theta: float = Field(..., description="cameraOffsetTheta in degrees")
+
+
 @app.on_event("startup")
 async def on_startup() -> None:
+    load_dotenv_if_present()
     session = get_session()
     session.set_event_loop(asyncio.get_running_loop())
     session.logs.add("info", "Web server started")
@@ -159,6 +168,38 @@ def api_scan_latest() -> dict[str, Any]:
     session = get_session()
     latest = session.get_latest_scan()
     return {"ok": True, "scan": latest}
+
+
+@app.post("/api/feishu/camera-offset")
+def api_feishu_camera_offset(body: FeishuCameraOffsetRequest) -> dict[str, Any]:
+    session = get_session()
+    vin = body.vin.strip()
+    if not vin:
+        return {"ok": False, "error": "车架号不能为空。"}
+
+    try:
+        settings = FeishuSettings.from_env()
+        summary = run_update(settings, sn=vin, theta=body.theta)
+    except ValueError as exc:
+        session.logs.add("error", f"Feishu config: {exc}")
+        return {"ok": False, "error": str(exc)}
+    except FeishuApiError as exc:
+        session.logs.add("error", f"Feishu sync failed: {exc}")
+        return {"ok": False, "error": str(exc)}
+    except Exception as exc:
+        session.logs.add("error", f"Feishu sync failed: {exc}")
+        return {"ok": False, "error": str(exc)}
+
+    session.logs.add(
+        "info",
+        f"Feishu updated record_id={summary['record_id']} S/N={vin!r} theta={summary['theta']}",
+    )
+    return {
+        "ok": True,
+        "record_id": summary["record_id"],
+        "vin": vin,
+        "theta": summary["theta"],
+    }
 
 
 @app.get("/api/logs")

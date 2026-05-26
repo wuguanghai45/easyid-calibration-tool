@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import * as api from "./api";
 import { runRealCalibration, type UiState } from "./calibration";
 
 const IDLE_HINT = "输入车架号后开始标定。";
@@ -32,24 +33,37 @@ export default function App() {
     setUiState("running");
     setResultText("标定中");
 
+    const frameNo = vin.trim();
+
     try {
       const outcome = await runRealCalibration();
-
 
       setSteps(outcome.steps);
 
       if (outcome.ok) {
         setUiState("success");
         setResultText("成功");
-        setHint(outcome.hint);
+
+        const feishuRes = await api.syncCameraOffset(frameNo, outcome.scan.theta_deg);
+        const nextSteps = [...outcome.steps];
+        let hintText = outcome.hint;
+        if (feishuRes.ok) {
+          nextSteps.push("飞书同步成功");
+        } else {
+          hintText = `${outcome.hint} 飞书同步失败：${feishuRes.error || "未知错误"}`;
+        }
+        setSteps(nextSteps);
+        setHint(hintText);
+
         try {
           sessionStorage.setItem(
             "last_calibration",
             JSON.stringify({
-              vin: vin.trim(),
+              vin: frameNo,
               scan: outcome.scan,
               ts: Date.now(),
               status: "OK",
+              feishu_synced: feishuRes.ok,
             })
           );
         } catch {

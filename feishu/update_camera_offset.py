@@ -17,10 +17,18 @@ def run_update(
     settings: FeishuSettings,
     *,
     sn: str,
-    view_id: str,
     theta: float,
+    view_id: str | None = None,
 ) -> dict[str, Any]:
-    """Execute the four-step Feishu flow; return update API response data."""
+    """
+    Execute the four-step Feishu flow; return update API response data.
+
+    ``sn`` matches the Bitable column S/N* (Web UI frame number / 车架号).
+    """
+    resolved_view_id = (view_id or settings.view_id).strip()
+    if not resolved_view_id:
+        raise ValueError("view_id is required (set FEISHU_VIEW_ID or pass view_id).")
+
     with FeishuClient(settings.app_id, settings.app_secret) as client:
         app_token = get_bitable_app_token(
             client,
@@ -31,7 +39,7 @@ def run_update(
             client,
             app_token,
             settings.table_id,
-            view_id,
+            resolved_view_id,
             sn,
         )
         result = update_camera_offset_theta(
@@ -62,8 +70,8 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--view-id",
-        required=True,
-        help="Bitable view_id (from table URL).",
+        default=None,
+        help="Bitable view_id (defaults to FEISHU_VIEW_ID from .env).",
     )
     parser.add_argument(
         "--theta",
@@ -83,8 +91,8 @@ def main(argv: list[str] | None = None) -> int:
         summary = run_update(
             settings,
             sn=args.sn.strip(),
-            view_id=args.view_id.strip(),
             theta=args.theta,
+            view_id=args.view_id.strip() if args.view_id else None,
         )
     except ValueError as exc:
         print(f"配置错误: {exc}", file=sys.stderr)

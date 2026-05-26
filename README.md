@@ -230,7 +230,9 @@ flowchart LR
 
 ## 飞书多维表格：更新 cameraOffsetTheta(°)
 
-标定完成后，可按设备 **S/N\*** 将角度写回飞书 Bitable 中的 **`cameraOffsetTheta(°)`** 列。流程：鉴权 → 知识库节点解析 `app_token` → 按 S/N 查询记录 → 更新字段。
+标定完成后，可按 **S/N\***（Web 校准台中的「车架号」）将角度写回飞书 Bitable 中的 **`cameraOffsetTheta(°)`** 列。流程：鉴权 → 知识库节点解析 `app_token` → 按 S/N 查询记录 → 更新字段。
+
+Web 校准台在**标定通过**（偏移在阈值内）后会自动调用 `POST /api/feishu/camera-offset` 上传 `θ`；飞书同步失败时标定仍显示成功，页面会追加失败提示。
 
 ### 配置
 
@@ -242,6 +244,7 @@ flowchart LR
 | `FEISHU_APP_SECRET` | 应用 App Secret |
 | `FEISHU_WIKI_TOKEN` | 知识库节点 token（`feishu.cn/wiki/...` URL 中） |
 | `FEISHU_TABLE_ID` | 数据表 `table_id` |
+| `FEISHU_VIEW_ID` | 数据表视图 `view_id`（URL 中，用于查询记录） |
 | `FEISHU_OBJ_TYPE` | 可选，默认 `wiki` |
 
 2. 在飞书开放平台为应用开通权限并**发布版本**（未开通时 `get_node` 会返回 `code=99991672`）：
@@ -258,11 +261,10 @@ pip install -r requirements.txt
 
 python -m feishu.update_camera_offset \
   --sn K17A05AN \
-  --view-id vewBikWgKP \
   --theta 0.1
 ```
 
-每次调用需提供 `--sn`（对应列 `S/N*`）、`--view-id`（视图 ID）和 `--theta`（角度，度）。查询到 0 条或多条同 S/N 记录时会失败且不会执行更新。
+`--sn` 对应列 `S/N*`（与 Web 车架号相同）；`--view-id` 可省略（默认使用 `.env` 中的 `FEISHU_VIEW_ID`）。查询到 0 条或多条同 S/N 记录时会失败且不会执行更新。
 
 ## 项目结构
 
