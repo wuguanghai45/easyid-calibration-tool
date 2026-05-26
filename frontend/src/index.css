@@ -256,6 +256,20 @@ body.failure .progress-steps li.active .progress-step-marker {
   flex-shrink: 0;
 }
 
+.flow-steps li {
+  flex-wrap: wrap;
+}
+
+.flow-step-title {
+  flex-shrink: 0;
+}
+
+.flow-step-detail {
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.4;
+}
+
 .hint {
   color: var(--muted);
   font-size: 15px;

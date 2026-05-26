@@ -11,6 +11,16 @@ export interface DeviceInfo {
 export interface DeviceListItem extends DeviceInfo {
   index: number;
   interface_name?: string;
+  ip_before?: string;
+  ip_after?: string;
+  ip_reconfigured?: boolean;
+  ip_recovered?: boolean;
+}
+
+export interface FlowStep {
+  id: string;
+  title: string;
+  detail?: string;
 }
 
 export interface ConfigField {

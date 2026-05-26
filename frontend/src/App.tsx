@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
 import * as api from "./api";
 import {
+  buildFeishuDetail,
+  END_STEP_TITLE,
   FEISHU_STEP_LABEL,
   FEISHU_STEP_SHORT_LABEL,
   normalizeThetaOffsetDeg,
+  progressCompletedCount,
   runRealCalibration,
   STEP_LABELS,
   STEP_SHORT_LABELS,
@@ -11,6 +14,7 @@ import {
   type CalibrationProgress,
   type UiState,
 } from "./calibration";
+import type { FlowStep } from "./types";
 
 const IDLE_HINT = "输入车架号后开始标定。";
 
@@ -37,7 +41,7 @@ export default function App() {
   const [vin, setVin] = useState("");
   const [uiState, setUiState] = useState<UiState>("idle");
   const [resultText, setResultText] = useState("待开始");
-  const [steps, setSteps] = useState<string[]>([]);
+  const [steps, setSteps] = useState<FlowStep[]>([]);
   const [activeStepIndex, setActiveStepIndex] = useState<number | null>(null);
   const [hint, setHint] = useState(IDLE_HINT);
   const [busy, setBusy] = useState(false);
@@ -73,7 +77,7 @@ export default function App() {
     const frameNo = vin.trim();
 
     try {
-      const outcome = await runRealCalibration(applyProgress);
+      const outcome = await runRealCalibration(frameNo, applyProgress);
 
       setSteps(outcome.steps);
       setActiveStepIndex(null);
@@ -92,7 +96,13 @@ export default function App() {
         const nextSteps = [...outcome.steps];
         let hintText = outcome.hint;
         if (feishuRes.ok) {
-          nextSteps.push(FEISHU_STEP_LABEL);
+          const feishuDetail = buildFeishuDetail(feishuRes);
+          nextSteps.push(
+            feishuDetail
+              ? { id: "feishu", title: FEISHU_STEP_LABEL, detail: feishuDetail }
+              : { id: "feishu", title: FEISHU_STEP_LABEL }
+          );
+          nextSteps.push({ id: "end", title: END_STEP_TITLE });
         } else {
           hintText = `${outcome.hint} 飞书同步失败：${feishuRes.error || "未知错误"}`;
         }
@@ -106,6 +116,7 @@ export default function App() {
             JSON.stringify({
               vin: frameNo,
               scan: outcome.scan,
+              steps: nextSteps,
               ts: Date.now(),
               status: "OK",
               feishu_synced: feishuRes.ok,
@@ -130,7 +141,7 @@ export default function App() {
     }
   };
 
-  const completedCount = steps.length;
+  const completedCount = progressCompletedCount(steps);
   const showProgress = uiState !== "idle";
   const percent = progressPercent(completedCount, activeStepIndex);
 
@@ -187,9 +198,14 @@ export default function App() {
           </div>
         )}
 
-        <ul>
-          {steps.map((text) => (
-            <li key={text}>{text}</li>
+        <ul className="flow-steps">
+          {steps.map((step) => (
+            <li key={step.id}>
+              <span className="flow-step-title">{step.title}</span>
+              {step.detail ? (
+                <span className="flow-step-detail">（{step.detail}）</span>
+              ) : null}
+            </li>
           ))}
         </ul>
         <p className="hint">{hint || (uiState === "idle" ? IDLE_HINT : "")}</p>
