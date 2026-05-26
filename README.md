@@ -228,6 +228,42 @@ flowchart LR
 | `0` | 采集成功 |
 | `1` | 失败（未找到设备、SDK 错误、超时等） |
 
+## 飞书多维表格：更新 cameraOffsetTheta(°)
+
+标定完成后，可按设备 **S/N\*** 将角度写回飞书 Bitable 中的 **`cameraOffsetTheta(°)`** 列。流程：鉴权 → 知识库节点解析 `app_token` → 按 S/N 查询记录 → 更新字段。
+
+### 配置
+
+1. 复制 [`.env.example`](.env.example) 为 `.env`，填写自建应用凭证与表格定位信息：
+
+| 环境变量 | 说明 |
+|----------|------|
+| `FEISHU_APP_ID` | 飞书自建应用 App ID |
+| `FEISHU_APP_SECRET` | 应用 App Secret |
+| `FEISHU_WIKI_TOKEN` | 知识库节点 token（`feishu.cn/wiki/...` URL 中） |
+| `FEISHU_TABLE_ID` | 数据表 `table_id` |
+| `FEISHU_OBJ_TYPE` | 可选，默认 `wiki` |
+
+2. 在飞书开放平台为应用开通权限并**发布版本**（未开通时 `get_node` 会返回 `code=99991672`）：
+   - 知识库：`wiki:node:read`（或 `wiki:wiki` / `wiki:wiki:readonly`）
+   - 多维表格：`bitable:app` 或 `base:record:retrieve` + `base:record:update`
+3. 将应用加入目标知识库，并在多维表格中通过 **「添加文档应用」** 授予可管理/可编辑权限（若开启高级权限）。详见[为应用或用户开通文档权限](https://open.feishu.cn/document/ukTMukTMukTM/uczNzUjL3czM14yN3MTN#16c6475a)。
+
+API 说明见 [`docs/feishu_apis/`](docs/feishu_apis/)。
+
+### 命令行
+
+```bash
+pip install -r requirements.txt
+
+python -m feishu.update_camera_offset \
+  --sn K17A05AN \
+  --view-id vewBikWgKP \
+  --theta 0.1
+```
+
+每次调用需提供 `--sn`（对应列 `S/N*`）、`--view-id`（视图 ID）和 `--theta`（角度，度）。查询到 0 条或多条同 S/N 记录时会失败且不会执行更新。
+
 ## 项目结构
 
 ```text
@@ -236,6 +272,7 @@ easyid-calibration-tool/
 ├── run_web.py                      # Web 服务入口
 ├── web/                            # FastAPI 应用
 ├── frontend/                       # React 校准台 UI
+├── feishu/                         # 飞书 Bitable 同步（cameraOffsetTheta）
 ├── scanner_reader.py             # 采集流程编排
 ├── scanner/                      # IMV 业务模块
 ├── imv_sdk/                      # MVSDK Python 封装
