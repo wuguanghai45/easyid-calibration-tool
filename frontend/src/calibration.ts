@@ -7,8 +7,20 @@ export const SCAN_POLL_MS = 500;
 export const SCAN_TIMEOUT_MS = 30_000;
 
 export const STEP_LABELS = ["扫描成功", "绑定成功", "配置成功", "标定成功"] as const;
+export const STEP_SHORT_LABELS = ["扫描", "绑定", "配置", "标定"] as const;
+export const FEISHU_STEP_SHORT_LABEL = "飞书同步";
+export const FEISHU_STEP_LABEL = "飞书同步成功";
+export const TOTAL_PROGRESS_STEPS =
+  STEP_SHORT_LABELS.length + 1; /* calibration + Feishu */
 
 export type UiState = "idle" | "running" | "success" | "failure";
+
+/** Incremental progress while runRealCalibration executes. */
+export type CalibrationProgress = {
+  completedSteps: string[];
+  /** 0-based index of the step currently in progress. */
+  activeIndex: number;
+};
 
 export type CalibrationOutcome =
   | { ok: true; steps: string[]; scan: ScanResult; hint: string }
@@ -58,8 +70,16 @@ export async function waitForScan(
   return null;
 }
 
-export async function runRealCalibration(): Promise<CalibrationOutcome> {
+export async function runRealCalibration(
+  onProgress?: (progress: CalibrationProgress) => void
+): Promise<CalibrationOutcome> {
   const steps: string[] = [];
+
+  const notify = (activeIndex: number) => {
+    onProgress?.({ completedSteps: [...steps], activeIndex });
+  };
+
+  notify(0);
 
   const listRes = await api.listDevices();
   if (listRes.error) {
@@ -79,6 +99,7 @@ export async function runRealCalibration(): Promise<CalibrationOutcome> {
   }
 
   steps.push(STEP_LABELS[0]);
+  notify(1);
 
   const device: DeviceListItem = devices[0];
   const connectRes = await api.connect({
@@ -98,6 +119,7 @@ export async function runRealCalibration(): Promise<CalibrationOutcome> {
   }
 
   steps.push(STEP_LABELS[1]);
+  notify(2);
 
   const configRes = await api.getConfig();
   if (!configRes.ok) {
@@ -109,6 +131,7 @@ export async function runRealCalibration(): Promise<CalibrationOutcome> {
   }
 
   steps.push(STEP_LABELS[2]);
+  notify(3);
 
   const scan = await waitForScan();
   if (!scan) {

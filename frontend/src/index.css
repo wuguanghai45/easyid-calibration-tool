@@ -126,6 +126,112 @@ button:disabled {
   font-weight: 800;
 }
 
+.progress-panel {
+  margin-bottom: 16px;
+}
+
+.progress-track {
+  height: 8px;
+  border-radius: 999px;
+  background: #e2e8f0;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #0b6fd3, #12965d);
+  transition: width 0.35s ease;
+}
+
+body.success .progress-fill {
+  background: #12965d;
+}
+
+body.failure .progress-fill {
+  background: #c73535;
+}
+
+.progress-steps {
+  display: flex;
+  justify-content: space-between;
+  gap: 4px;
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.progress-steps li {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  text-align: center;
+}
+
+.progress-step-marker {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 2px solid #cbd5e1;
+  background: #fff;
+  flex-shrink: 0;
+  transition:
+    background 0.25s ease,
+    border-color 0.25s ease;
+}
+
+.progress-steps li.done .progress-step-marker {
+  border-color: #12965d;
+  background: #12965d;
+}
+
+.progress-steps li.active .progress-step-marker {
+  border-color: #0b6fd3;
+  background: #0b6fd3;
+  box-shadow: 0 0 0 4px rgba(11, 111, 211, 0.2);
+  animation: progress-pulse 1.2s ease-in-out infinite;
+}
+
+body.success .progress-steps li.done .progress-step-marker,
+body.success .progress-steps li.active .progress-step-marker {
+  border-color: #12965d;
+  background: #12965d;
+  box-shadow: none;
+  animation: none;
+}
+
+body.failure .progress-steps li.active .progress-step-marker {
+  border-color: #c73535;
+  background: #c73535;
+  box-shadow: 0 0 0 4px rgba(199, 53, 53, 0.2);
+  animation: none;
+}
+
+.progress-step-label {
+  font-size: 12px;
+  line-height: 1.2;
+  color: var(--muted);
+}
+
+.progress-steps li.done .progress-step-label,
+.progress-steps li.active .progress-step-label {
+  color: #344054;
+  font-weight: 600;
+}
+
+@keyframes progress-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.08);
+  }
+}
+
 .status ul {
   margin: 0;
   padding: 0;
@@ -133,7 +239,7 @@ button:disabled {
   color: #344054;
 }
 
-.status li {
+.status ul li {
   display: flex;
   align-items: center;
   gap: 10px;
@@ -141,7 +247,7 @@ button:disabled {
   font-size: 16px;
 }
 
-.status li::before {
+.status ul li::before {
   content: "";
   width: 10px;
   height: 10px;
