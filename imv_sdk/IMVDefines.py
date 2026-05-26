@@ -503,7 +503,7 @@ class _IMV_ErrorList_(Structure):
 
 _IMV_ErrorList_._fields_ = [
     ('nParamCnt', c_uint),
-    ('paramNameList', IMV_String),
+    ('paramNameList', IMV_String * IMV_MAX_ERROR_LIST_NUM),
 ]
 IMV_ErrorList = _IMV_ErrorList_
 

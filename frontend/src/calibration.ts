@@ -81,11 +81,10 @@ export function buildBindDetail(device: DeviceListItem): string | undefined {
   return joinDetail(parts);
 }
 
-export function buildConfigDetail(fields: ConfigField[]): string | undefined {
-  if (fields.length === 0) {
-    return undefined;
-  }
-
+export function buildConfigDetail(
+  fields: ConfigField[],
+  failedParamCount = 0
+): string | undefined {
   const highlights: string[] = [];
   for (const field of fields) {
     const label = CONFIG_DETAIL_KEYS[field.key];
@@ -95,10 +94,20 @@ export function buildConfigDetail(fields: ConfigField[]): string | undefined {
     highlights.push(`${label}=${field.value}`);
   }
 
+  if (failedParamCount > 0) {
+    highlights.push(`部分参数未生效: ${failedParamCount} 项`);
+  }
+
   if (highlights.length > 0) {
     return joinDetail(highlights);
   }
-  return `已读取 ${fields.length} 项配置`;
+  if (fields.length > 0) {
+    return `已导入 ${fields.length} 项配置`;
+  }
+  if (failedParamCount > 0) {
+    return `部分参数未生效: ${failedParamCount} 项`;
+  }
+  return "配置已导入";
 }
 
 export function buildCalibrationDetail(scan: ScanResult): string | undefined {
@@ -220,17 +229,22 @@ export async function runRealCalibration(
   steps.push(flowStep("bind", STEP_LABELS[1], buildBindDetail(connectedDevice)));
   notify(2);
 
-  const configRes = await api.getConfig();
+  const configRes = await api.importConfig();
   if (!configRes.ok) {
     return {
       ok: false,
       steps,
-      hint: `配置失败：${configRes.error || "读取配置失败"}`,
+      hint: `配置失败：${configRes.error || "导入配置失败"}`,
     };
   }
 
+  const failedCount = configRes.failed_params?.length ?? 0;
   steps.push(
-    flowStep("config", STEP_LABELS[2], buildConfigDetail(configRes.fields ?? []))
+    flowStep(
+      "config",
+      STEP_LABELS[2],
+      buildConfigDetail(configRes.fields ?? [], failedCount)
+    )
   );
   notify(3);
 

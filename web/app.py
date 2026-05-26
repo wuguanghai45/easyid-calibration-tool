@@ -56,6 +56,10 @@ class ConfigUpdateRequest(BaseModel):
     persist: bool = True
 
 
+class ConfigImportRequest(BaseModel):
+    persist: bool = True
+
+
 class FeishuCameraOffsetRequest(BaseModel):
     vin: str = Field(..., min_length=1, description="Frame number; matches Bitable column S/N*")
     theta: float = Field(..., description="cameraOffsetTheta in degrees")
@@ -129,6 +133,18 @@ def api_put_config(body: ConfigUpdateRequest) -> dict[str, Any]:
         result = session.write_config(body.updates, persist=body.persist)
         return {"ok": True, **result}
     except ScannerProtocolError as exc:
+        return {"ok": False, "error": str(exc)}
+
+
+@app.post("/api/config/import")
+def api_import_config(body: ConfigImportRequest | None = None) -> dict[str, Any]:
+    session = get_session()
+    persist = body.persist if body is not None else True
+    try:
+        result = session.import_config(persist=persist)
+        return {"ok": True, **result}
+    except ScannerProtocolError as exc:
+        session.logs.add("error", f"Config import failed: {exc}")
         return {"ok": False, "error": str(exc)}
 
 

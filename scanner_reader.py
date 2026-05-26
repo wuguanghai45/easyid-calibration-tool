@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any
 
 from scanner.capture import capture_soft_trigger_frame
 from scanner.config_export import export_device_configs
+from scanner.config_import import load_device_config
 from scanner.device import (
     close_camera,
     enum_devices,
@@ -178,6 +179,16 @@ class ScannerReader:
         self._ensure_connected()
         assert self.cam is not None
         return export_device_configs(self.cam, output_dir)
+
+    def import_device_config(
+        self,
+        config_path: Path | None = None,
+        *,
+        persist: bool = True,
+    ) -> dict[str, Any]:
+        self._ensure_connected()
+        assert self.cam is not None
+        return load_device_config(self.cam, config_path, persist=persist)
 
     def capture_scan(self, output_dir: Path, options: CaptureOptions) -> dict[str, Any]:
         self._ensure_connected()

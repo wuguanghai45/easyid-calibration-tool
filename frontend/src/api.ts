@@ -46,6 +46,20 @@ export async function getConfig() {
   return request<{ ok: boolean; fields?: ConfigField[]; error?: string }>("/config");
 }
 
+export async function importConfig(persist = true) {
+  return request<{
+    ok: boolean;
+    fields?: ConfigField[];
+    error?: string;
+    failed_params?: string[];
+    config_path?: string;
+    userset_saved?: boolean;
+  }>("/config/import", {
+    method: "POST",
+    body: JSON.stringify({ persist }),
+  });
+}
+
 export async function putConfig(updates: Record<string, unknown>, persist = true) {
   return request<{ ok: boolean; fields?: ConfigField[]; error?: string }>("/config", {
     method: "PUT",

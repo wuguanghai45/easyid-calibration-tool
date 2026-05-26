@@ -141,6 +141,19 @@ class DeviceSession:
             self._ensure_imv()
             return self.reader.export_configs(output_dir)
 
+    def import_config(self, *, persist: bool = True) -> dict[str, Any]:
+        was_preview = self.preview_running
+        if was_preview:
+            self._stop_preview()
+        with self._imv_lock:
+            self._ensure_imv()
+            result = self.reader.import_device_config(persist=persist)
+        if was_preview and self.reader.cam is not None:
+            with self._imv_lock:
+                self._start_preview_locked()
+        self._log("info", "Camera config imported", path=result.get("config_path"))
+        return result
+
     def start_preview(self) -> None:
         with self._imv_lock:
             self._ensure_imv()

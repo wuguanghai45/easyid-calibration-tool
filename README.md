@@ -69,6 +69,7 @@ pip install -r requirements.txt
 
 - **IMV SDK**：设备发现、GenICam 配置读写、MJPEG 实时预览
 - **TCP :3000**：实时扫码偏移 `(x;y;θ;code)`，经 WebSocket 推送到页面
+- **配置导入**：连接后自动将 [`config/carmer_config.xml`](config/carmer_config.xml) 写入相机（`IMV_LoadDeviceCfg`）；可通过环境变量 `CAMERA_CONFIG_PATH` 指定其它模板路径
 
 ### 启动后端
 
@@ -101,6 +102,7 @@ cd .. && python run_web.py
 | `GET /api/devices` | 枚举设备 |
 | `POST /api/connect` | 连接 IMV + 启动 TCP/预览 |
 | `GET /api/config` / `PUT /api/config` | 读写曝光、增益等 |
+| `POST /api/config/import` | 从 `config/carmer_config.xml` 导入整机配置（Web 校准第 3 步） |
 | `GET /api/stream/mjpeg` | 实时预览流 |
 | `WS /api/ws/scan` | 实时扫码数据 |
 
