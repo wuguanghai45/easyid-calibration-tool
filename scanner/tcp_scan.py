@@ -23,8 +23,11 @@ def radians_to_huaray_theta(theta_rad: float) -> int:
 
 
 def huaray_theta_to_degrees(theta: int) -> float:
-    """Camera theta unit -> degrees (3600 units = 360 deg)."""
-    return (int(theta) % 3600) / 10.0
+    """Camera theta unit -> signed offset degrees in (-180, 180]."""
+    deg = (int(theta) % 3600) / 10.0
+    if deg > 180:
+        deg -= 360
+    return deg
 
 
 def parse_scan_payload(text: str) -> list[dict[str, str | int]]:

@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
 import * as api from "./api";
-import { runRealCalibration, type UiState } from "./calibration";
+import {
+  normalizeThetaOffsetDeg,
+  runRealCalibration,
+  type UiState,
+} from "./calibration";
 
 const IDLE_HINT = "输入车架号后开始标定。";
 
@@ -44,7 +48,10 @@ export default function App() {
         setUiState("success");
         setResultText("成功");
 
-        const feishuRes = await api.syncCameraOffset(frameNo, outcome.scan.theta_deg);
+        const feishuRes = await api.syncCameraOffset(
+          frameNo,
+          normalizeThetaOffsetDeg(outcome.scan.theta_deg)
+        );
         const nextSteps = [...outcome.steps];
         let hintText = outcome.hint;
         if (feishuRes.ok) {

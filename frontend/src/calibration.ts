@@ -14,16 +14,25 @@ export type CalibrationOutcome =
   | { ok: true; steps: string[]; scan: ScanResult; hint: string }
   | { ok: false; steps: string[]; hint: string };
 
+/** Map 0–360° device reading to signed offset in (-180, 180]. */
+export function normalizeThetaOffsetDeg(deg: number): number {
+  if (deg > 180) return deg - 360;
+  if (deg < -180) return deg + 360;
+  return deg;
+}
+
 export function isCalibrationPass(scan: ScanResult): boolean {
+  const theta = normalizeThetaOffsetDeg(scan.theta_deg);
   return (
     Math.abs(scan.x_offset) <= OFFSET_LIMIT &&
     Math.abs(scan.y_offset) <= OFFSET_LIMIT &&
-    Math.abs(scan.theta_deg) < ANGLE_LIMIT_DEG
+    Math.abs(theta) < ANGLE_LIMIT_DEG
   );
 }
 
 export function formatCalibrationHint(scan: ScanResult, passed: boolean): string {
-  const values = `Δx=${scan.x_offset}, Δy=${scan.y_offset}, θ=${scan.theta_deg.toFixed(1)}°`;
+  const theta = normalizeThetaOffsetDeg(scan.theta_deg);
+  const values = `Δx=${scan.x_offset}, Δy=${scan.y_offset}, θ=${theta.toFixed(1)}°`;
   if (passed) {
     return `相机外参标定完成。（${values}）`;
   }
