@@ -37,6 +37,23 @@ function progressPercent(completedCount: number, activeIndex: number | null): nu
   return Math.min(100, ((completedCount + partial) / TOTAL_PROGRESS_STEPS) * 100);
 }
 
+/** Split comma-joined detail string into display rows. */
+function splitDetailItems(detail: string): string[] {
+  return detail
+    .split("，")
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+/** Parse "label value" pairs (e.g. "型号 MV-xxx", "IP 192.168.x.x"). */
+function parseDetailPair(item: string): { label: string; value: string } {
+  const space = item.indexOf(" ");
+  if (space <= 0) {
+    return { label: "", value: item };
+  }
+  return { label: item.slice(0, space), value: item.slice(space + 1).trim() };
+}
+
 export default function App() {
   const [vin, setVin] = useState("");
   const [uiState, setUiState] = useState<UiState>("idle");
@@ -168,7 +185,11 @@ export default function App() {
         <p className="result">{resultText}</p>
 
         {showProgress && (
-          <div className="progress-panel" role="group" aria-label="标定进度">
+          <div
+            className={`progress-panel${uiState === "success" ? " progress-panel--complete" : ""}`}
+            role="group"
+            aria-label="标定进度"
+          >
             <div
               className="progress-track"
               role="progressbar"
@@ -198,17 +219,46 @@ export default function App() {
           </div>
         )}
 
-        <ul className="flow-steps">
-          {steps.map((step) => (
-            <li key={step.id}>
-              <span className="flow-step-title">{step.title}</span>
-              {step.detail ? (
-                <span className="flow-step-detail">（{step.detail}）</span>
-              ) : null}
-            </li>
-          ))}
-        </ul>
-        <p className="hint">{hint || (uiState === "idle" ? IDLE_HINT : "")}</p>
+        {steps.length > 0 && (
+          <ul className="flow-steps">
+            {steps.map((step) => {
+              const isEnd = step.id === "end";
+              const meta = step.detail ? splitDetailItems(step.detail) : [];
+              return (
+                <li
+                  key={step.id}
+                  className={isEnd ? "flow-step flow-step--end" : "flow-step"}
+                >
+                  <span className="flow-step-title">{step.title}</span>
+                  {meta.length > 0 && (
+                    <dl className="flow-step-meta">
+                      {meta.map((item) => {
+                        const { label, value } = parseDetailPair(item);
+                        return (
+                          <div key={item} className="flow-step-meta-row">
+                            {label ? (
+                              <>
+                                <dt>{label}</dt>
+                                <dd>{value}</dd>
+                              </>
+                            ) : (
+                              <dd className="flow-step-meta-single">{value}</dd>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </dl>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        )}
+        <p
+          className={`hint${uiState === "success" && hint ? " hint--summary" : ""}`}
+        >
+          {hint || (uiState === "idle" ? IDLE_HINT : "")}
+        </p>
       </section>
     </main>
   );
