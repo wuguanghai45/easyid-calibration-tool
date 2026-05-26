@@ -97,14 +97,11 @@ export default function App() {
       const outcome = await runRealCalibration(applyProgress);
 
       setSteps(outcome.steps);
-      setActiveStepIndex(null);
 
       if (outcome.ok) {
-        setUiState("success");
-        setResultText("成功");
-
         const feishuStepIndex = STEP_LABELS.length;
         setActiveStepIndex(feishuStepIndex);
+        setResultText("飞书同步中");
 
         const feishuRes = await api.syncCameraOffset(
           frameNo,
@@ -125,6 +122,8 @@ export default function App() {
         }
         setSteps(nextSteps);
         setActiveStepIndex(null);
+        setUiState("success");
+        setResultText("成功");
         setHint(hintText);
 
         try {
@@ -186,7 +185,11 @@ export default function App() {
 
         {showProgress && (
           <div
-            className={`progress-panel${uiState === "success" ? " progress-panel--complete" : ""}`}
+            className={`progress-panel${
+              uiState === "success" && activeStepIndex === null
+                ? " progress-panel--complete"
+                : ""
+            }`}
             role="group"
             aria-label="标定进度"
           >

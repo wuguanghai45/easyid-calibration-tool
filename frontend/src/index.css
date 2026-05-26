@@ -224,8 +224,7 @@ body.failure .progress-fill {
   animation: progress-pulse 1.2s ease-in-out infinite;
 }
 
-body.success .progress-steps li.done .progress-step-marker,
-body.success .progress-steps li.active .progress-step-marker {
+body.success .progress-steps li.done .progress-step-marker {
   border-color: #12965d;
   background: #12965d;
   box-shadow: none;
