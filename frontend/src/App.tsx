@@ -232,12 +232,15 @@ export default function App() {
                   key={step.id}
                   className={isEnd ? "flow-step flow-step--end" : "flow-step"}
                 >
-                  <span className="flow-step-title">{step.title}</span>
-                  {meta.length > 0 && (
-                    // Use native details/summary for step-detail folding.
+                  {meta.length > 0 ? (
+                    // Native details/summary: chevron beside step title toggles detail panel.
                     <details className="flow-step-detail" open={false}>
-                      <summary className="flow-step-detail-summary">
-                        查看详细数据
+                      <summary
+                        className="flow-step-header"
+                        aria-label={`${step.title} 详细数据`}
+                      >
+                        <span className="flow-step-title">{step.title}</span>
+                        <span className="flow-step-toggle" aria-hidden="true" />
                       </summary>
                       <dl className="flow-step-meta">
                         {meta.map((item) => {
@@ -257,6 +260,8 @@ export default function App() {
                         })}
                       </dl>
                     </details>
+                  ) : (
+                    <span className="flow-step-title">{step.title}</span>
                   )}
                 </li>
               );

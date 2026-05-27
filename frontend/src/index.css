@@ -299,31 +299,67 @@ body.failure .progress-steps li.active .progress-step-marker {
   width: 100%;
 }
 
-.flow-step-detail-summary {
+.flow-step-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   cursor: pointer;
   user-select: none;
-  display: block;
-  color: var(--muted);
-  font-size: 13px;
-  font-weight: 500;
-  padding: 2px 0 0;
   list-style: none;
 }
 
-.flow-step-detail-summary::-webkit-details-marker {
+.flow-step-header::-webkit-details-marker {
   display: none;
 }
 
-.flow-step-detail-summary::marker {
+.flow-step-header::marker {
   display: none;
 }
 
-.flow-step-detail[open] .flow-step-detail-summary {
+.flow-step-header .flow-step-title {
+  grid-column: unset;
+  flex: 1;
+  min-width: 0;
+}
+
+.flow-step-toggle {
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  color: var(--muted);
+  transition: color 0.2s ease;
+}
+
+.flow-step-toggle::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: rotate(45deg);
+  margin-top: -3px;
+  transition: transform 0.2s ease;
+}
+
+.flow-step-detail[open] .flow-step-toggle {
+  color: #0b6fd3;
+}
+
+.flow-step-detail[open] .flow-step-toggle::before {
+  transform: rotate(-135deg);
+  margin-top: 3px;
+}
+
+.flow-step-header:hover .flow-step-toggle {
   color: #0b6fd3;
 }
 
 .flow-step-meta {
-  grid-column: 2;
   margin: 8px 0 0;
   padding: 10px 12px;
   border-radius: 6px;
