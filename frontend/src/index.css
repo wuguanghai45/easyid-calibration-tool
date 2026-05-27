@@ -294,6 +294,34 @@ body.failure .progress-steps li.active .progress-step-marker {
   line-height: 1.45;
 }
 
+.flow-step-detail {
+  grid-column: 2;
+  width: 100%;
+}
+
+.flow-step-detail-summary {
+  cursor: pointer;
+  user-select: none;
+  display: block;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 500;
+  padding: 2px 0 0;
+  list-style: none;
+}
+
+.flow-step-detail-summary::-webkit-details-marker {
+  display: none;
+}
+
+.flow-step-detail-summary::marker {
+  display: none;
+}
+
+.flow-step-detail[open] .flow-step-detail-summary {
+  color: #0b6fd3;
+}
+
 .flow-step-meta {
   grid-column: 2;
   margin: 8px 0 0;

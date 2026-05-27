@@ -234,23 +234,29 @@ export default function App() {
                 >
                   <span className="flow-step-title">{step.title}</span>
                   {meta.length > 0 && (
-                    <dl className="flow-step-meta">
-                      {meta.map((item) => {
-                        const { label, value } = parseDetailPair(item);
-                        return (
-                          <div key={item} className="flow-step-meta-row">
-                            {label ? (
-                              <>
-                                <dt>{label}</dt>
-                                <dd>{value}</dd>
-                              </>
-                            ) : (
-                              <dd className="flow-step-meta-single">{value}</dd>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </dl>
+                    // Use native details/summary for step-detail folding.
+                    <details className="flow-step-detail" open={false}>
+                      <summary className="flow-step-detail-summary">
+                        查看详细数据
+                      </summary>
+                      <dl className="flow-step-meta">
+                        {meta.map((item) => {
+                          const { label, value } = parseDetailPair(item);
+                          return (
+                            <div key={item} className="flow-step-meta-row">
+                              {label ? (
+                                <>
+                                  <dt>{label}</dt>
+                                  <dd>{value}</dd>
+                                </>
+                              ) : (
+                                <dd className="flow-step-meta-single">{value}</dd>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </dl>
+                    </details>
                   )}
                 </li>
               );
