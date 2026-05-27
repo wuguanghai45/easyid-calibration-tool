@@ -88,6 +88,8 @@ npm run dev
 
 Vite 开发服务器会将 `/api` 代理到 `http://127.0.0.1:8080`。
 
+车架号支持浏览器摄像头扫码（需 **HTTPS** 或 **localhost**；推荐 Chrome / Edge，Safari 使用 ZXing 回退）。产线 USB 扫码枪（键盘楔入）仍可直接输入框键入。
+
 ### 生产构建（单进程）
 
 ```bash

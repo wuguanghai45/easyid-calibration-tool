@@ -15,8 +15,10 @@ import {
   type UiState,
 } from "./calibration";
 import type { FlowStep } from "./types";
+import { VinScanDialog } from "./VinScanDialog";
+import { normalizeVin } from "./vinScanner";
 
-const IDLE_HINT = "输入车架号后开始标定。";
+const IDLE_HINT = "输入车架号或点击「扫码」后开始标定。";
 
 const PROGRESS_STEP_LABELS = [...STEP_SHORT_LABELS, FEISHU_STEP_SHORT_LABEL];
 
@@ -62,6 +64,7 @@ export default function App() {
   const [activeStepIndex, setActiveStepIndex] = useState<number | null>(null);
   const [hint, setHint] = useState(IDLE_HINT);
   const [busy, setBusy] = useState(false);
+  const [scanOpen, setScanOpen] = useState(false);
 
   useEffect(() => {
     document.body.className = uiState;
@@ -166,14 +169,34 @@ export default function App() {
       <h1>相机外参标定</h1>
 
       <label htmlFor="vin">车架号</label>
-      <input
-        id="vin"
-        type="text"
-        autoComplete="off"
-        placeholder="请输入车架号"
-        value={vin}
-        disabled={busy}
-        onChange={(e) => setVin(e.target.value)}
+      <div className="vin-row">
+        <input
+          id="vin"
+          type="text"
+          autoComplete="off"
+          placeholder="请输入车架号"
+          value={vin}
+          disabled={busy}
+          onChange={(e) => setVin(e.target.value)}
+        />
+        <button
+          type="button"
+          className="vin-scan-btn"
+          disabled={busy}
+          onClick={() => setScanOpen(true)}
+        >
+          扫码
+        </button>
+      </div>
+
+      <VinScanDialog
+        open={scanOpen}
+        onClose={() => setScanOpen(false)}
+        onScanned={(value) => {
+          setVin(normalizeVin(value));
+          setScanOpen(false);
+          setHint("已扫码填入车架号。");
+        }}
       />
 
       <button type="button" disabled={busy} onClick={runCalibration}>
