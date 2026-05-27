@@ -14,21 +14,73 @@ const BARCODE_FORMATS = [
 
 const SCAN_TIMEOUT_MS = 60_000;
 
+type LegacyGetUserMedia = (
+  constraints: MediaStreamConstraints,
+  onSuccess: (stream: MediaStream) => void,
+  onError: (error: Error) => void
+) => void;
+
+type NavigatorWithLegacy = Navigator & {
+  getUserMedia?: LegacyGetUserMedia;
+  webkitGetUserMedia?: LegacyGetUserMedia;
+  mozGetUserMedia?: LegacyGetUserMedia;
+};
+
 export function normalizeVin(raw: string): string {
   return raw.replace(/[\x00-\x1f\x7f]/g, "").trim();
 }
 
+function isLocalhostHost(hostname: string): boolean {
+  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]";
+}
+
+/** Resolve getUserMedia across modern and legacy browser APIs. */
+export function resolveGetUserMedia():
+  | ((constraints: MediaStreamConstraints) => Promise<MediaStream>)
+  | null {
+  if (navigator.mediaDevices?.getUserMedia) {
+    return (constraints) => navigator.mediaDevices.getUserMedia(constraints);
+  }
+
+  const legacyNav = navigator as unknown as NavigatorWithLegacy;
+  const legacyFn =
+    legacyNav.getUserMedia ?? legacyNav.webkitGetUserMedia ?? legacyNav.mozGetUserMedia;
+  const legacy = legacyFn?.bind(navigator);
+
+  if (!legacy) {
+    return null;
+  }
+
+  return (constraints) =>
+    new Promise<MediaStream>((resolve, reject) => {
+      legacy(constraints, resolve, reject);
+    });
+}
+
 export function isCameraScanSupported(): boolean {
-  return Boolean(navigator.mediaDevices?.getUserMedia) && window.isSecureContext;
+  return Boolean(resolveGetUserMedia()) && window.isSecureContext;
 }
 
 export function cameraScanUnsupportedReason(): string | null {
-  if (!navigator.mediaDevices?.getUserMedia) {
-    return "当前浏览器不支持摄像头访问。";
-  }
+  const { hostname, origin, port, protocol } = window.location;
+  const defaultPort = port || (protocol === "https:" ? "443" : "80");
+
   if (!window.isSecureContext) {
-    return "摄像头扫码需要 HTTPS 或 localhost 安全上下文。";
+    if (isLocalhostHost(hostname)) {
+      return `当前页面非安全上下文（${origin}），无法使用摄像头。请检查是否被嵌入 iframe 或使用了受限模式。`;
+    }
+    return (
+      `无法在非 HTTPS 地址上使用摄像头（当前：${origin}）。` +
+      `若在本机操作，请改用 http://localhost:${defaultPort}；` +
+      `若需用手机或其它设备扫码，请使用 HTTPS 启动服务：` +
+      `python run_web.py --ssl --port ${defaultPort}，然后用 https://<本机IP>:${defaultPort} 访问并接受证书提示。`
+    );
   }
+
+  if (!resolveGetUserMedia()) {
+    return "当前浏览器不提供摄像头 API，请使用 Chrome、Edge 或 Safari 最新版本。";
+  }
+
   return null;
 }
 
@@ -38,13 +90,18 @@ export async function startVinCamera(): Promise<MediaStream> {
     throw new Error(reason);
   }
 
+  const getUserMedia = resolveGetUserMedia();
+  if (!getUserMedia) {
+    throw new Error("当前浏览器不提供摄像头 API。");
+  }
+
   try {
-    return await navigator.mediaDevices.getUserMedia({
+    return await getUserMedia({
       video: { facingMode: { ideal: "environment" } },
       audio: false,
     });
   } catch {
-    return await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+    return await getUserMedia({ video: true, audio: false });
   }
 }
 
