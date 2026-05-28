@@ -95,11 +95,23 @@ npm run dev          # http://localhost:5173（默认，与产线 HTTP 一致，
 npm run dev:https    # https://localhost:5173（调试浏览器摄像头扫码）
 ```
 
-**车架号输入**
+**车架号（VIN）扫码**
 
-- **HTTP**（`npm run dev`、或 `python run_web.py` 无 `--ssl`）：页面不显示「扫码」按钮，请手动输入或使用 USB 扫码枪（键盘楔入）。
-- **HTTPS**（`npm run dev:https`、或 `python run_web.py --ssl`）：显示「扫码」，可用浏览器摄像头扫条码（推荐 Chrome / Edge；Safari 使用 ZXing 回退）。
-- **手机 / 其它设备摄像头扫码**：`python run_web.py --ssl --port 8080`，用 `https://<工控机IP>:8080` 打开并信任自签名证书。
+产线 Web 流程：点击 **开始标定** → 后端通过 **串口条码枪** 读取车架号（协议与 [`demo/sn_scaner_demo.py`](demo/sn_scaner_demo.py) 相同：`\\x16T\\r` 开激光、读一行、`\\x16U\\r` 关激光）→ 自动执行 IMV 标定与飞书同步。每次开始标定都会重新扫码，覆盖输入框已有内容。
+
+| 环境变量 | 默认 | 说明 |
+|----------|------|------|
+| `SN_SCANNER_PORT` | `COM4` | 串口号（Windows 如 `COM4`，Linux 如 `/dev/ttyUSB0`） |
+| `SN_SCANNER_BAUDRATE` | `115200` | 波特率 |
+| `SN_SCANNER_READ_TIMEOUT` | `3.0` | 开激光后等待条码的最长时间（秒） |
+
+调试：先单独运行 `python demo/sn_scaner_demo.py` 确认硬件与端口，再在 `.env` 中设置 `SN_SCANNER_PORT`。
+
+**浏览器摄像头扫码（可选）**
+
+- **HTTP**（`npm run dev`、或 `python run_web.py` 无 `--ssl`）：不显示「扫码」按钮。
+- **HTTPS**（`npm run dev:https`、或 `python run_web.py --ssl`）：显示「扫码」，仅作调试/备用（摄像头扫条码填入输入框，不替代开始标定时的串口扫码）。
+- **手机 / 其它设备摄像头**：`python run_web.py --ssl --port 8080`，用 `https://<工控机IP>:8080` 访问并接受证书。
 
 ### 生产构建（单进程）
 
@@ -112,6 +124,7 @@ cd .. && python run_web.py
 
 | API | 说明 |
 |-----|------|
+| `POST /api/vin/scan` | 串口扫码枪读取车架号（开始标定前调用） |
 | `GET /api/devices` | 枚举设备 |
 | `POST /api/connect` | 连接 IMV + 启动 TCP/预览 |
 | `GET /api/config` / `PUT /api/config` | 读写曝光、增益等 |

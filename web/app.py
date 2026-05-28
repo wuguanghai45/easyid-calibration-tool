@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 from feishu.config import FeishuSettings, load_dotenv_if_present
 from feishu.errors import FeishuApiError
 from feishu.update_camera_offset import run_update
+from scanner.vin_serial import VinSerialError, scan_vin_once
 from scanner_utils import ScannerProtocolError
 from web.session import get_session
 
@@ -71,6 +72,22 @@ async def on_startup() -> None:
     session = get_session()
     session.set_event_loop(asyncio.get_running_loop())
     session.logs.add("info", "Web server started")
+
+
+@app.post("/api/vin/scan")
+async def api_vin_scan() -> dict[str, Any]:
+    session = get_session()
+    try:
+        vin = await asyncio.to_thread(scan_vin_once)
+    except VinSerialError as exc:
+        session.logs.add("error", f"VIN serial scan failed: {exc}")
+        return {"ok": False, "error": str(exc)}
+    except Exception as exc:
+        session.logs.add("error", f"VIN serial scan failed: {exc}")
+        return {"ok": False, "error": str(exc)}
+
+    session.logs.add("info", f"VIN serial scan ok: {vin!r}")
+    return {"ok": True, "vin": vin}
 
 
 @app.get("/api/devices")

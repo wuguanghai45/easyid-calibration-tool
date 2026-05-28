@@ -10,6 +10,12 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+export async function scanVinSerial() {
+  return request<{ ok: boolean; vin?: string; error?: string }>("/vin/scan", {
+    method: "POST",
+  });
+}
+
 export async function listDevices(interfaceName?: string) {
   const q = interfaceName ? `?interface=${encodeURIComponent(interfaceName)}` : "";
   return request<{ devices: DeviceListItem[]; error?: string }>(`/devices${q}`);

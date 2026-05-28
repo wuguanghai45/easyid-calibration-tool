@@ -18,8 +18,9 @@ import type { FlowStep } from "./types";
 import { VinScanDialog } from "./VinScanDialog";
 import { isVinScanUiAvailable, normalizeVin } from "./vinScanner";
 
-const IDLE_HINT_HTTP = "输入车架号后开始标定。";
-const IDLE_HINT_HTTPS = "输入车架号或点击「扫码」后开始标定。";
+const IDLE_HINT_HTTP = "点击「开始标定」，将先通过扫码器读取车架号。";
+const IDLE_HINT_HTTPS =
+  "点击「开始标定」，将先通过扫码器读取车架号；也可使用「扫码」调试摄像头。";
 
 const PROGRESS_STEP_LABELS = [...STEP_SHORT_LABELS, FEISHU_STEP_SHORT_LABEL];
 
@@ -85,21 +86,30 @@ export default function App() {
   }, []);
 
   const runCalibration = async () => {
-    if (!vin.trim()) {
-      setHint("请先输入车架号。");
-      return;
-    }
-
     setBusy(true);
-    setVin((v) => v.trim());
     resetProgress();
     setUiState("running");
-    setResultText("标定中");
-    setActiveStepIndex(0);
+    setResultText("扫码中");
+    setHint("请将车架条码对准扫码器…");
+    setActiveStepIndex(null);
 
-    const frameNo = vin.trim();
+    let frameNo = "";
 
     try {
+      const vinRes = await api.scanVinSerial();
+      if (!vinRes.ok || !vinRes.vin?.trim()) {
+        setUiState("failure");
+        setResultText("失败");
+        setHint(vinRes.error || "未扫到车架号，请重试。");
+        return;
+      }
+
+      frameNo = normalizeVin(vinRes.vin);
+      setVin(frameNo);
+      setResultText("标定中");
+      setHint("车架号已读取，正在标定…");
+      setActiveStepIndex(0);
+
       const outcome = await runRealCalibration(applyProgress);
 
       setSteps(outcome.steps);
