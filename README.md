@@ -80,18 +80,26 @@ python run_web.py --host 0.0.0.0 --port 8080
 
 ### 开发前端（可选）
 
+先在本机启动后端（API 为 HTTP）：
+
+```bash
+python run_web.py --host 0.0.0.0 --port 8080
+```
+
+再启动前端（`/api` 代理到 `http://127.0.0.1:8080`）：
+
 ```bash
 cd frontend
 npm install
-npm run dev
+npm run dev          # http://localhost:5173（默认，与产线 HTTP 一致，不显示「扫码」）
+npm run dev:https    # https://localhost:5173（调试浏览器摄像头扫码）
 ```
 
-Vite 开发服务器默认启用 HTTPS（自签名证书），并将 `/api` 代理到 `http://127.0.0.1:8080`。本机可访问 `https://localhost:5173`。
+**车架号输入**
 
-车架号支持浏览器摄像头扫码（需 **HTTPS** 或 **localhost**；推荐 Chrome / Edge，Safari 使用 ZXing 回退）。产线 USB 扫码枪（键盘楔入）仍可直接输入框键入。
-
-- **本机浏览器**：使用 `http://localhost:8080`（不要用局域网 IP 的 HTTP，否则会提示无法使用摄像头）。
-- **手机 / 其它设备扫码**：`python run_web.py --ssl --port 8080`，用 `https://<工控机IP>:8080` 打开并信任自签名证书。
+- **HTTP**（`npm run dev`、或 `python run_web.py` 无 `--ssl`）：页面不显示「扫码」按钮，请手动输入或使用 USB 扫码枪（键盘楔入）。
+- **HTTPS**（`npm run dev:https`、或 `python run_web.py --ssl`）：显示「扫码」，可用浏览器摄像头扫条码（推荐 Chrome / Edge；Safari 使用 ZXing 回退）。
+- **手机 / 其它设备摄像头扫码**：`python run_web.py --ssl --port 8080`，用 `https://<工控机IP>:8080` 打开并信任自签名证书。
 
 ### 生产构建（单进程）
 

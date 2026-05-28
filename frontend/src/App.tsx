@@ -16,9 +16,10 @@ import {
 } from "./calibration";
 import type { FlowStep } from "./types";
 import { VinScanDialog } from "./VinScanDialog";
-import { normalizeVin } from "./vinScanner";
+import { isVinScanUiAvailable, normalizeVin } from "./vinScanner";
 
-const IDLE_HINT = "输入车架号或点击「扫码」后开始标定。";
+const IDLE_HINT_HTTP = "输入车架号后开始标定。";
+const IDLE_HINT_HTTPS = "输入车架号或点击「扫码」后开始标定。";
 
 const PROGRESS_STEP_LABELS = [...STEP_SHORT_LABELS, FEISHU_STEP_SHORT_LABEL];
 
@@ -62,7 +63,9 @@ export default function App() {
   const [resultText, setResultText] = useState("待开始");
   const [steps, setSteps] = useState<FlowStep[]>([]);
   const [activeStepIndex, setActiveStepIndex] = useState<number | null>(null);
-  const [hint, setHint] = useState(IDLE_HINT);
+  const showVinScan = isVinScanUiAvailable();
+  const idleHint = showVinScan ? IDLE_HINT_HTTPS : IDLE_HINT_HTTP;
+  const [hint, setHint] = useState(idleHint);
   const [busy, setBusy] = useState(false);
   const [scanOpen, setScanOpen] = useState(false);
 
@@ -179,25 +182,29 @@ export default function App() {
           disabled={busy}
           onChange={(e) => setVin(e.target.value)}
         />
-        <button
-          type="button"
-          className="vin-scan-btn"
-          disabled={busy}
-          onClick={() => setScanOpen(true)}
-        >
-          扫码
-        </button>
+        {showVinScan && (
+          <button
+            type="button"
+            className="vin-scan-btn"
+            disabled={busy}
+            onClick={() => setScanOpen(true)}
+          >
+            扫码
+          </button>
+        )}
       </div>
 
-      <VinScanDialog
-        open={scanOpen}
-        onClose={() => setScanOpen(false)}
-        onScanned={(value) => {
-          setVin(normalizeVin(value));
-          setScanOpen(false);
-          setHint("已扫码填入车架号。");
-        }}
-      />
+      {showVinScan && (
+        <VinScanDialog
+          open={scanOpen}
+          onClose={() => setScanOpen(false)}
+          onScanned={(value) => {
+            setVin(normalizeVin(value));
+            setScanOpen(false);
+            setHint("已扫码填入车架号。");
+          }}
+        />
+      )}
 
       <button type="button" disabled={busy} onClick={runCalibration}>
         开始标定
@@ -294,7 +301,7 @@ export default function App() {
         <p
           className={`hint${uiState === "success" && hint ? " hint--summary" : ""}`}
         >
-          {hint || (uiState === "idle" ? IDLE_HINT : "")}
+          {hint || (uiState === "idle" ? idleHint : "")}
         </p>
       </section>
     </main>

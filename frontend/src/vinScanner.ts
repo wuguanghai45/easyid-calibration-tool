@@ -57,6 +57,11 @@ export function resolveGetUserMedia():
     });
 }
 
+/** Whether the VIN camera scan button should be shown (hidden on plain HTTP). */
+export function isVinScanUiAvailable(): boolean {
+  return window.location.protocol !== "http:";
+}
+
 export function isCameraScanSupported(): boolean {
   return Boolean(resolveGetUserMedia()) && window.isSecureContext;
 }
