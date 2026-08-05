@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-# Field names must match the Bitable column headers exactly.
+# Default field names for production「整机生产记录表（FY26）」.
+# Override via FEISHU_SN_FIELD / FEISHU_THETA_FIELD when needed.
 SN_FIELD = "S/N*"
-MODEL_FIELD = "Model*"
 THETA_FIELD = "cameraOffsetTheta(°)"
 
 # Known API error codes -> Chinese hints (step name is appended in the message).

@@ -1,4 +1,4 @@
-"""CLI and orchestration: update cameraOffsetTheta(°) in Feishu Bitable by S/N."""
+"""CLI and orchestration: update cameraOffsetTheta in Feishu Bitable by SN."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from typing import Any
 from feishu.bitable import search_record_by_sn, update_camera_offset_theta
 from feishu.client import FeishuClient
 from feishu.config import FeishuSettings, load_dotenv_if_present
-from feishu.errors import FeishuApiError, THETA_FIELD
+from feishu.errors import FeishuApiError
 from feishu.wiki import get_bitable_app_token
 
 
@@ -23,7 +23,8 @@ def run_update(
     """
     Execute the four-step Feishu flow; return update API response data.
 
-    ``sn`` matches the Bitable column S/N* (Web UI frame number / 车架号).
+    ``sn`` matches the Bitable S/N column (Web UI frame number / 车架号),
+    default ``S/N*`` (override with ``FEISHU_SN_FIELD``).
     """
     resolved_view_id = (view_id or settings.view_id).strip()
     if not resolved_view_id:
@@ -41,6 +42,8 @@ def run_update(
             settings.table_id,
             resolved_view_id,
             sn,
+            sn_field=settings.sn_field,
+            theta_field=settings.theta_field,
         )
         result = update_camera_offset_theta(
             client,
@@ -48,25 +51,30 @@ def run_update(
             settings.table_id,
             record_id,
             theta,
+            theta_field=settings.theta_field,
         )
     return {
         "app_token": app_token,
         "record_id": record_id,
         "sn": sn,
         "theta": theta,
-        "field": THETA_FIELD,
+        "field": settings.theta_field,
+        "sn_field": settings.sn_field,
         "update": result.get("data", {}),
     }
 
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Update cameraOffsetTheta(°) in Feishu Bitable for a device S/N.",
+        description=(
+            "Update cameraOffsetTheta in Feishu Bitable for a device S/N "
+            "(default column S/N*; override with FEISHU_SN_FIELD)."
+        ),
     )
     parser.add_argument(
         "--sn",
         required=True,
-        help="Device serial number (matches Bitable column S/N*).",
+        help="Device serial number (matches Bitable S/N column, default S/N*).",
     )
     parser.add_argument(
         "--view-id",
@@ -103,7 +111,8 @@ def main(argv: list[str] | None = None) -> int:
 
     print(
         f"已更新 record_id={summary['record_id']} "
-        f"S/N={summary['sn']!r} {THETA_FIELD}={summary['theta']}"
+        f"{summary['sn_field']}={summary['sn']!r} "
+        f"{summary['field']}={summary['theta']}"
     )
     return 0
 

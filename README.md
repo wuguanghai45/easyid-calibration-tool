@@ -271,9 +271,11 @@ Web 校准台在**标定通过**（偏移在阈值内）后会自动调用 `POST
 | `FEISHU_APP_ID` | 飞书自建应用 App ID |
 | `FEISHU_APP_SECRET` | 应用 App Secret |
 | `FEISHU_WIKI_TOKEN` | 知识库节点 token（`feishu.cn/wiki/...` URL 中） |
-| `FEISHU_TABLE_ID` | 数据表 `table_id` |
+| `FEISHU_TABLE_ID` | 数据表 `table_id`（生产「整机生产记录表」） |
 | `FEISHU_VIEW_ID` | 数据表视图 `view_id`（URL 中，用于查询记录） |
 | `FEISHU_OBJ_TYPE` | 可选，默认 `wiki` |
+| `FEISHU_SN_FIELD` | 可选，SN 列名，默认 `S/N*`（与表头完全一致） |
+| `FEISHU_THETA_FIELD` | 可选，角度列名，默认 `cameraOffsetTheta(°)` |
 
 2. 在飞书开放平台为应用开通权限并**发布版本**（未开通时 `get_node` 会返回 `code=99991672`）：
    - 知识库：`wiki:node:read`（或 `wiki:wiki` / `wiki:wiki:readonly`）
@@ -292,7 +294,7 @@ python -m feishu.update_camera_offset \
   --theta 0.1
 ```
 
-`--sn` 对应列 `S/N*`（与 Web 车架号相同）；`--view-id` 可省略（默认使用 `.env` 中的 `FEISHU_VIEW_ID`）。查询到 0 条或多条同 S/N 记录时会失败且不会执行更新。
+`--sn` 对应列 `S/N*`（可由 `FEISHU_SN_FIELD` 覆盖，与 Web 车架号相同）；`--view-id` 可省略（默认使用 `.env` 中的 `FEISHU_VIEW_ID`）。查询到 0 条或多条同 S/N 记录时会失败且不会执行更新。搜索不再依赖已更名的 `Model*`（现为 `型号*`）。
 
 ## 项目结构
 

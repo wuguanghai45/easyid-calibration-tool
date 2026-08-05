@@ -5,6 +5,8 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
+from feishu.errors import SN_FIELD, THETA_FIELD
+
 
 @dataclass(frozen=True)
 class FeishuSettings:
@@ -16,6 +18,8 @@ class FeishuSettings:
     table_id: str
     view_id: str
     obj_type: str = "wiki"
+    sn_field: str = SN_FIELD
+    theta_field: str = THETA_FIELD
 
     @classmethod
     def from_env(cls) -> FeishuSettings:
@@ -25,6 +29,10 @@ class FeishuSettings:
         table_id = os.environ.get("FEISHU_TABLE_ID", "").strip()
         view_id = os.environ.get("FEISHU_VIEW_ID", "").strip()
         obj_type = os.environ.get("FEISHU_OBJ_TYPE", "wiki").strip() or "wiki"
+        sn_field = os.environ.get("FEISHU_SN_FIELD", SN_FIELD).strip() or SN_FIELD
+        theta_field = (
+            os.environ.get("FEISHU_THETA_FIELD", THETA_FIELD).strip() or THETA_FIELD
+        )
 
         missing = [
             name
@@ -51,6 +59,8 @@ class FeishuSettings:
             table_id=table_id,
             view_id=view_id,
             obj_type=obj_type,
+            sn_field=sn_field,
+            theta_field=theta_field,
         )
 
 

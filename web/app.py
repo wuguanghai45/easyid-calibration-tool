@@ -62,7 +62,11 @@ class ConfigImportRequest(BaseModel):
 
 
 class FeishuCameraOffsetRequest(BaseModel):
-    vin: str = Field(..., min_length=1, description="Frame number; matches Bitable column S/N*")
+    vin: str = Field(
+        ...,
+        min_length=1,
+        description="Frame number; matches Bitable S/N column (default S/N*)",
+    )
     theta: float = Field(..., description="cameraOffsetTheta in degrees")
 
 
@@ -225,7 +229,8 @@ def api_feishu_camera_offset(body: FeishuCameraOffsetRequest) -> dict[str, Any]:
 
     session.logs.add(
         "info",
-        f"Feishu updated record_id={summary['record_id']} S/N={vin!r} theta={summary['theta']}",
+        f"Feishu updated record_id={summary['record_id']} "
+        f"{summary.get('sn_field', 'SN*')}={vin!r} theta={summary['theta']}",
     )
     return {
         "ok": True,
