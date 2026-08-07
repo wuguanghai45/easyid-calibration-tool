@@ -122,6 +122,36 @@ cd .. && python run_web.py
 
 构建产物在 `frontend/dist/`，由 FastAPI 静态挂载；API 路径前缀为 `/api`。
 
+### Windows 开机自启动
+
+产线工控机可用计划任务在开机约 30 秒后拉起 Web 服务（无需 NSSM）。请先完成依赖安装、`.env` 配置与前端 `npm run build`，再安装自启。
+
+以**管理员**打开 PowerShell：
+
+```powershell
+cd <repo>
+powershell -ExecutionPolicy Bypass -File scripts\windows\install_autostart.ps1
+
+# 卸载
+powershell -ExecutionPolicy Bypass -File scripts\windows\uninstall_autostart.ps1
+```
+
+也可先手动验证启动脚本：
+
+```bat
+scripts\windows\start_web.bat
+```
+
+| 项 | 说明 |
+|----|------|
+| 计划任务名 | `EasyID-Calibration-Web` |
+| 启动命令 | [`scripts/windows/start_web.bat`](scripts/windows/start_web.bat)（优先 `.venv\Scripts\python.exe`） |
+| 默认监听 | `0.0.0.0:8080`（可用环境变量 `EASYID_WEB_HOST` / `EASYID_WEB_PORT` 覆盖） |
+| 日志 | `logs\web-YYYYMMDD.log` |
+| 管理界面 | `taskschd.msc`，或 `Get-ScheduledTask -TaskName EasyID-Calibration-Web` |
+
+安装时若缺少 `Runtime\x64\MVSDKmd.dll`、Python / `.venv` 或 `frontend\dist`，脚本会给出警告但不会中止。
+
 | API | 说明 |
 |-----|------|
 | `POST /api/vin/scan` | 串口扫码枪读取车架号（开始标定前调用） |
@@ -309,6 +339,7 @@ easyid-calibration-tool/
 ├── scanner/                      # IMV 业务模块
 ├── imv_sdk/                      # MVSDK Python 封装
 ├── Runtime/x64/                  # MVSDKmd.dll（Windows x64）
+├── scripts/windows/              # 开机自启（计划任务）安装/卸载与启动脚本
 ├── scanner_config.py             # GenICam 特征名候选
 ├── scanner_utils.py
 ├── SDKPython/                    # 厂商示例与 sdk.pdf（参考）

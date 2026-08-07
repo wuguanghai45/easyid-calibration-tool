@@ -7,3 +7,4 @@ frontend/dist
 calibration_out
 .env
 .certs/
+logs/
