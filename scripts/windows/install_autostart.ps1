@@ -1,12 +1,14 @@
 #Requires -RunAsAdministrator
 <#
 .SYNOPSIS
-  Register a Windows Scheduled Task to start the EasyID calibration web server at boot.
+  Register a Windows Scheduled Task to start the EasyID calibration web server at boot / logon.
 #>
 [CmdletBinding()]
 param(
     [string]$TaskName = "EasyID-Calibration-Web",
-    [int]$StartupDelaySeconds = 30
+    [int]$StartupDelaySeconds = 30,
+    [switch]$AsSystem,
+    [switch]$NoStartNow
 )
 
 $ErrorActionPreference = "Stop"
@@ -26,11 +28,14 @@ $FrontendDist = Join-Path $RepoRoot "frontend\dist\index.html"
 
 if (-not (Test-Path -LiteralPath $VenvPython)) {
     $pythonOnPath = Get-Command python -ErrorAction SilentlyContinue
-    if (-not $pythonOnPath) {
-        Write-Warning "No .venv Python and no 'python' on PATH. start_web.bat will fail until Python is available."
+    $pyLauncher = Get-Command py -ErrorAction SilentlyContinue
+    if (-not $pythonOnPath -and -not $pyLauncher) {
+        Write-Warning "No .venv Python and no 'python'/'py' on PATH. start_web.bat will fail until Python is available."
     } else {
-        Write-Warning "No .venv found at $VenvPython; start_web.bat will use PATH python ($($pythonOnPath.Source))."
+        Write-Warning "No .venv found at $VenvPython; start_web.bat will use PATH python/py."
     }
+} else {
+    Write-Host "Using venv Python: $VenvPython"
 }
 
 if (-not (Test-Path -LiteralPath $MvsdkDll)) {
@@ -47,16 +52,20 @@ if ($existing) {
     Write-Host "Removed existing task: $TaskName"
 }
 
-$delay = [TimeSpan]::FromSeconds($StartupDelaySeconds)
-$delayIso = "PT{0}S" -f [int]$delay.TotalSeconds
+$delayIso = "PT{0}S" -f $StartupDelaySeconds
 
+# Run via cmd /c so WorkingDirectory + bat relative paths resolve reliably.
 $action = New-ScheduledTaskAction `
     -Execute "cmd.exe" `
-    -Argument "/c `"$StartBat`"" `
+    -Argument "/c call `"$StartBat`"" `
     -WorkingDirectory $RepoRoot
 
-$trigger = New-ScheduledTaskTrigger -AtStartup
-$trigger.Delay = $delayIso
+# At logon (factory PCs usually auto-login) + at startup with delay.
+$logonTrigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
+$logonTrigger.Delay = $delayIso
+
+$startupTrigger = New-ScheduledTaskTrigger -AtStartup
+$startupTrigger.Delay = $delayIso
 
 $settings = New-ScheduledTaskSettingsSet `
     -AllowStartIfOnBatteries `
@@ -64,26 +73,55 @@ $settings = New-ScheduledTaskSettingsSet `
     -StartWhenAvailable `
     -ExecutionTimeLimit ([TimeSpan]::Zero) `
     -RestartCount 3 `
-    -RestartInterval (New-TimeSpan -Minutes 1)
+    -RestartInterval (New-TimeSpan -Minutes 1) `
+    -MultipleInstances IgnoreNew
+# Hide console window when the task runs (supported on Windows 8+ / Server 2012+).
+if ($null -ne ($settings | Get-Member -Name Hidden -ErrorAction SilentlyContinue)) {
+    $settings.Hidden = $true
+}
 
-# SYSTEM: run at boot without requiring an interactive login.
-$principal = New-ScheduledTaskPrincipal `
-    -UserId "SYSTEM" `
-    -LogonType ServiceAccount `
-    -RunLevel Highest
+if ($AsSystem) {
+    # Optional: boot without interactive login (may miss user-only Python PATH).
+    $principal = New-ScheduledTaskPrincipal `
+        -UserId "SYSTEM" `
+        -LogonType ServiceAccount `
+        -RunLevel Highest
+    $triggers = @($startupTrigger)
+    Write-Host "Principal: SYSTEM (AtStartup only)"
+} else {
+    # Default: current user — can see user-installed Python / .venv; works with auto-logon.
+    $principal = New-ScheduledTaskPrincipal `
+        -UserId $env:USERNAME `
+        -LogonType Interactive `
+        -RunLevel Highest
+    $triggers = @($logonTrigger, $startupTrigger)
+    Write-Host "Principal: $env:USERNAME (AtLogOn + AtStartup)"
+}
 
 Register-ScheduledTask `
     -TaskName $TaskName `
     -Action $action `
-    -Trigger $trigger `
+    -Trigger $triggers `
     -Settings $settings `
     -Principal $principal `
-    -Description "Start EasyID DataMatrix calibration web (run_web.py) at system startup." `
+    -Description "Start EasyID DataMatrix calibration web (run_web.py) at logon/startup." `
     -Force | Out-Null
 
 Write-Host "Registered scheduled task: $TaskName"
-Write-Host "  Repo:    $RepoRoot"
-Write-Host "  Launcher:$StartBat"
-Write-Host "  Delay:   ${StartupDelaySeconds}s after startup"
-Write-Host "  Logs:    $(Join-Path $RepoRoot 'logs')"
-Write-Host "Verify in taskschd.msc, or: Get-ScheduledTask -TaskName '$TaskName'"
+Write-Host "  Repo:     $RepoRoot"
+Write-Host "  Launcher: $StartBat"
+Write-Host "  Delay:    ${StartupDelaySeconds}s"
+Write-Host "  Logs:     $(Join-Path $RepoRoot 'logs')"
+
+if (-not $NoStartNow) {
+    Write-Host "Starting task now for verification..."
+    Start-ScheduledTask -TaskName $TaskName
+    Start-Sleep -Seconds 3
+    $info = Get-ScheduledTaskInfo -TaskName $TaskName
+    Write-Host ("  LastTaskResult={0} LastRunTime={1}" -f $info.LastTaskResult, $info.LastRunTime)
+    Write-Host "  If LastTaskResult is 0/267009 and port 8080 listens, autostart works."
+    Write-Host "  Check log: $(Join-Path $RepoRoot 'logs')"
+}
+
+Write-Host "Verify: Get-ScheduledTask -TaskName '$TaskName' | Format-List *"
+Write-Host "Manual start: Start-ScheduledTask -TaskName '$TaskName'"

@@ -124,31 +124,50 @@ cd .. && python run_web.py
 
 ### Windows 开机自启动
 
-产线工控机可用计划任务在开机约 30 秒后拉起 Web 服务（无需 NSSM）。请先完成依赖安装、`.env` 配置与前端 `npm run build`，再安装自启。
+产线工控机可用计划任务在**用户登录 / 开机约 30 秒后**拉起 Web 服务（无需 NSSM）。请先完成依赖安装、`.env` 配置与前端 `npm run build`，再安装自启。
+
+**强烈建议**在仓库根目录创建 `.venv` 并 `pip install -r requirements.txt`，避免计划任务找不到用户 PATH 里的 Python。
 
 以**管理员**打开 PowerShell：
 
 ```powershell
 cd <repo>
+
+# 先手动确认能启动（浏览器访问 http://127.0.0.1:8080）
+scripts\windows\start_web.bat
+
+# 安装自启（默认会立即 Start 一次便于验证）
 powershell -ExecutionPolicy Bypass -File scripts\windows\install_autostart.ps1
+
+# 仅注册、不立刻启动
+powershell -ExecutionPolicy Bypass -File scripts\windows\install_autostart.ps1 -NoStartNow
+
+# 可选：用 SYSTEM 账号仅开机触发（无用户登录也会跑；需 .venv 绝对路径可用）
+powershell -ExecutionPolicy Bypass -File scripts\windows\install_autostart.ps1 -AsSystem
 
 # 卸载
 powershell -ExecutionPolicy Bypass -File scripts\windows\uninstall_autostart.ps1
 ```
 
-也可先手动验证启动脚本：
+安装后自检：
 
-```bat
-scripts\windows\start_web.bat
+```powershell
+Get-ScheduledTask -TaskName EasyID-Calibration-Web
+Get-ScheduledTaskInfo -TaskName EasyID-Calibration-Web
+Start-ScheduledTask -TaskName EasyID-Calibration-Web
+# LastTaskResult=0 或 267009(仍在运行) 且 8080 可访问即成功
+netstat -ano | findstr :8080
+type logs\web-*.log
 ```
 
 | 项 | 说明 |
 |----|------|
 | 计划任务名 | `EasyID-Calibration-Web` |
-| 启动命令 | [`scripts/windows/start_web.bat`](scripts/windows/start_web.bat)（优先 `.venv\Scripts\python.exe`） |
+| 默认账户 | 当前安装用户（`AtLogOn` + `AtStartup`）；`-AsSystem` 则仅 `AtStartup` |
+| 启动命令 | [`scripts/windows/start_web.bat`](scripts/windows/start_web.bat)（优先 `.venv\Scripts\python.exe`，其次 `py -3` / `python`） |
 | 默认监听 | `0.0.0.0:8080`（可用环境变量 `EASYID_WEB_HOST` / `EASYID_WEB_PORT` 覆盖） |
-| 日志 | `logs\web-YYYYMMDD.log` |
-| 管理界面 | `taskschd.msc`，或 `Get-ScheduledTask -TaskName EasyID-Calibration-Web` |
+| 日志 | `logs\web-YYYYMMDD.log`（失败原因优先看这里） |
+| 管理界面 | `taskschd.msc` |
 
 安装时若缺少 `Runtime\x64\MVSDKmd.dll`、Python / `.venv` 或 `frontend\dist`，脚本会给出警告但不会中止。
 
