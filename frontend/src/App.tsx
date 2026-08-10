@@ -21,6 +21,12 @@ import { isVinScanUiAvailable, normalizeVin } from "./vinScanner";
 const IDLE_HINT_HTTP = "点击「开始标定」，将先通过扫码器读取车架号。";
 const IDLE_HINT_HTTPS =
   "点击「开始标定」，将先通过扫码器读取车架号；也可使用「扫码」调试摄像头。";
+const IDLE_HINT_MANUAL = "点击「开始标定」，将使用手动输入的车架号。";
+
+function getIdleHint(useScanner: boolean, showVinScan: boolean): string {
+  if (!useScanner) return IDLE_HINT_MANUAL;
+  return showVinScan ? IDLE_HINT_HTTPS : IDLE_HINT_HTTP;
+}
 
 const PROGRESS_STEP_LABELS = [...STEP_SHORT_LABELS, FEISHU_STEP_SHORT_LABEL];
 
@@ -60,13 +66,14 @@ function parseDetailPair(item: string): { label: string; value: string } {
 
 export default function App() {
   const [vin, setVin] = useState("");
+  const [useScannerForVin, setUseScannerForVin] = useState(true);
   const [uiState, setUiState] = useState<UiState>("idle");
   const [resultText, setResultText] = useState("待开始");
   const [steps, setSteps] = useState<FlowStep[]>([]);
   const [activeStepIndex, setActiveStepIndex] = useState<number | null>(null);
   const showVinScan = isVinScanUiAvailable();
-  const idleHint = showVinScan ? IDLE_HINT_HTTPS : IDLE_HINT_HTTP;
-  const [hint, setHint] = useState(idleHint);
+  const idleHint = getIdleHint(useScannerForVin, showVinScan);
+  const [hint, setHint] = useState(() => getIdleHint(true, isVinScanUiAvailable()));
   const [busy, setBusy] = useState(false);
   const [scanOpen, setScanOpen] = useState(false);
 
@@ -85,29 +92,49 @@ export default function App() {
     setActiveStepIndex(progress.activeIndex);
   }, []);
 
+  const onToggleScannerForVin = (checked: boolean) => {
+    setUseScannerForVin(checked);
+    if (uiState === "idle") {
+      setHint(getIdleHint(checked, showVinScan));
+    }
+  };
+
   const runCalibration = async () => {
     setBusy(true);
     resetProgress();
     setUiState("running");
-    setResultText("扫码中");
-    setHint("请将车架条码对准扫码器…");
     setActiveStepIndex(null);
 
     let frameNo = "";
 
     try {
-      const vinRes = await api.scanVinSerial();
-      if (!vinRes.ok || !vinRes.vin?.trim()) {
-        setUiState("failure");
-        setResultText("失败");
-        setHint(vinRes.error || "未扫到车架号，请重试。");
-        return;
+      if (useScannerForVin) {
+        setResultText("扫码中");
+        setHint("请将车架条码对准扫码器…");
+
+        const vinRes = await api.scanVinSerial();
+        if (!vinRes.ok || !vinRes.vin?.trim()) {
+          setUiState("failure");
+          setResultText("失败");
+          setHint(vinRes.error || "未扫到车架号，请重试。");
+          return;
+        }
+
+        frameNo = normalizeVin(vinRes.vin);
+        setVin(frameNo);
+        setHint("车架号已读取，正在标定…");
+      } else {
+        frameNo = normalizeVin(vin);
+        if (!frameNo) {
+          setUiState("failure");
+          setResultText("失败");
+          setHint("请先输入车架号");
+          return;
+        }
+        setHint("正在标定…");
       }
 
-      frameNo = normalizeVin(vinRes.vin);
-      setVin(frameNo);
       setResultText("标定中");
-      setHint("车架号已读取，正在标定…");
       setActiveStepIndex(0);
 
       const outcome = await runRealCalibration(applyProgress);
@@ -215,6 +242,17 @@ export default function App() {
           }}
         />
       )}
+
+      <label className="vin-scanner-option" htmlFor="use-scanner-for-vin">
+        <input
+          id="use-scanner-for-vin"
+          type="checkbox"
+          checked={useScannerForVin}
+          disabled={busy}
+          onChange={(e) => onToggleScannerForVin(e.target.checked)}
+        />
+        使用扫描器获取车架号
+      </label>
 
       <button type="button" disabled={busy} onClick={runCalibration}>
         开始标定

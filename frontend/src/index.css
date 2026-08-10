@@ -107,6 +107,31 @@ input[type="text"]:disabled {
   width: auto;
 }
 
+.vin-scanner-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 12px 0 0;
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--text);
+  cursor: pointer;
+  user-select: none;
+}
+
+.vin-scanner-option input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  accent-color: var(--running);
+  cursor: pointer;
+}
+
+.vin-scanner-option:has(input:disabled) {
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+
 button.vin-scan-btn {
   width: auto;
   min-width: 88px;
