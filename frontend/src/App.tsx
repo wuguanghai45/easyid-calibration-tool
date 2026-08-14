@@ -25,20 +25,6 @@ const IDLE_HINT_HTTPS =
 const IDLE_HINT_MANUAL = "点击「开始标定」，将使用手动输入的车架号。";
 const AUTO_SCAN_RETRY_MS = 500;
 
-type VinScanResponse = Awaited<ReturnType<typeof api.scanVinSerial>>;
-
-let pendingVinScan: Promise<VinScanResponse> | null = null;
-
-/** Share one serial-port scan between automatic monitoring and a manual start. */
-function scanVinSerialShared(passive: boolean): Promise<VinScanResponse> {
-  if (pendingVinScan === null) {
-    pendingVinScan = api.scanVinSerial(passive).finally(() => {
-      pendingVinScan = null;
-    });
-  }
-  return pendingVinScan;
-}
-
 /** Wait before retrying passive scanner monitoring. */
 function wait(ms: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
@@ -138,7 +124,7 @@ export default function App() {
           setResultText("扫码中");
           setHint("请将车架二维码对准扫描器…");
 
-          const vinRes = await scanVinSerialShared(false);
+          const vinRes = await api.scanVinSerial();
           if (!vinRes.ok || !vinRes.vin?.trim()) {
             setUiState("failure");
             setResultText("失败");
@@ -229,15 +215,31 @@ export default function App() {
   }, [applyProgress, resetProgress, useScannerForVin, vin]);
 
   useEffect(() => {
-    if (!useScannerForVin || uiState !== "idle" || scanOpen) return;
+    if (!useScannerForVin || busy || scanOpen) return;
 
     let cancelled = false;
 
     const monitorScanner = async () => {
+      let cursor: number;
+      try {
+        const status = await api.getVinSerialStatus();
+        cursor = status.sequence;
+      } catch {
+        await wait(AUTO_SCAN_RETRY_MS);
+        if (!cancelled) void monitorScanner();
+        return;
+      }
+
       while (!cancelled) {
         try {
-          const vinRes = await scanVinSerialShared(true);
+          const vinRes = await api.scanVinSerial(true, cursor);
           if (cancelled) return;
+
+          if (vinRes.sequence <= cursor) {
+            await wait(AUTO_SCAN_RETRY_MS);
+            continue;
+          }
+          cursor = vinRes.sequence;
 
           const scannedVin = normalizeVin(vinRes.vin || "");
           if (vinRes.ok && scannedVin) {
@@ -256,7 +258,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [runCalibration, scanOpen, uiState, useScannerForVin]);
+  }, [busy, runCalibration, scanOpen, useScannerForVin]);
 
   const completedCount = progressCompletedCount(steps);
   const showProgress = uiState !== "idle";

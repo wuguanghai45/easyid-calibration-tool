@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field
 from feishu.config import FeishuSettings, load_dotenv_if_present
 from feishu.errors import FeishuApiError
 from feishu.update_camera_offset import run_update
-from scanner.vin_serial import VinSerialError, scan_vin_once
+from scanner.vin_serial import VinSerialError, get_vin_serial_monitor
 from scanner_utils import ScannerProtocolError
 from web.session import get_session
 
@@ -75,25 +75,56 @@ async def on_startup() -> None:
     load_dotenv_if_present()
     session = get_session()
     session.set_event_loop(asyncio.get_running_loop())
+    get_vin_serial_monitor().start()
     session.logs.add("info", "Web server started")
 
 
+@app.on_event("shutdown")
+async def on_shutdown() -> None:
+    get_vin_serial_monitor().stop()
+
+
+@app.get("/api/vin/status")
+def api_vin_status() -> dict[str, Any]:
+    return {"ok": True, **get_vin_serial_monitor().status()}
+
+
 @app.post("/api/vin/scan")
-async def api_vin_scan(passive: bool = False) -> dict[str, Any]:
+async def api_vin_scan(
+    passive: bool = False,
+    after: int | None = None,
+) -> dict[str, Any]:
     session = get_session()
+    timeout_s = 25.0 if passive else None
     try:
-        vin = await asyncio.to_thread(scan_vin_once)
+        monitor = get_vin_serial_monitor()
+        if passive:
+            scan = await asyncio.to_thread(
+                monitor.wait_for_scan,
+                after_sequence=after,
+                timeout_s=timeout_s,
+            )
+        else:
+            scan = await asyncio.to_thread(monitor.trigger_and_wait)
     except VinSerialError as exc:
         if not passive:
             session.logs.add("error", f"VIN serial scan failed: {exc}")
-        return {"ok": False, "error": str(exc)}
+        return {
+            "ok": False,
+            "error": str(exc),
+            "sequence": get_vin_serial_monitor().sequence,
+        }
     except Exception as exc:
         if not passive:
             session.logs.add("error", f"VIN serial scan failed: {exc}")
-        return {"ok": False, "error": str(exc)}
+        return {
+            "ok": False,
+            "error": str(exc),
+            "sequence": get_vin_serial_monitor().sequence,
+        }
 
-    session.logs.add("info", f"VIN serial scan ok: {vin!r}")
-    return {"ok": True, "vin": vin}
+    session.logs.add("info", f"VIN serial scan ok: {scan['vin']!r}")
+    return {"ok": True, **scan}
 
 
 @app.get("/api/devices")

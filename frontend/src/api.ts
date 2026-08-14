@@ -10,11 +10,28 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-export async function scanVinSerial(passive = false) {
-  const query = passive ? "?passive=true" : "";
-  return request<{ ok: boolean; vin?: string; error?: string }>(`/vin/scan${query}`, {
-    method: "POST",
-  });
+export async function getVinSerialStatus() {
+  return request<{
+    ok: boolean;
+    connected: boolean;
+    sequence: number;
+    port: string;
+    last_error?: string;
+  }>("/vin/status");
+}
+
+export async function scanVinSerial(passive = false, afterSequence?: number) {
+  const query = new URLSearchParams();
+  if (passive) query.set("passive", "true");
+  if (afterSequence !== undefined) query.set("after", String(afterSequence));
+  const suffix = query.size > 0 ? `?${query.toString()}` : "";
+  return request<{
+    ok: boolean;
+    vin?: string;
+    sequence: number;
+    ts?: number;
+    error?: string;
+  }>(`/vin/scan${suffix}`, { method: "POST" });
 }
 
 export async function listDevices(interfaceName?: string) {
