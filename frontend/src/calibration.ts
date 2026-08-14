@@ -1,7 +1,7 @@
 import * as api from "./api";
 import type { ConfigField, DeviceListItem, FlowStep, ScanResult } from "./types";
 
-export const OFFSET_LIMIT = 20;
+export const OFFSET_LIMIT = 30;
 export const ANGLE_LIMIT_DEG = 5;
 export const SCAN_POLL_MS = 500;
 export const SCAN_TIMEOUT_MS = 30_000;
