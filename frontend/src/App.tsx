@@ -84,6 +84,7 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [scanOpen, setScanOpen] = useState(false);
   const calibrationRunningRef = useRef(false);
+  const serialScanCursorRef = useRef<number | null>(null);
 
   useEffect(() => {
     document.body.className = uiState;
@@ -215,7 +216,11 @@ export default function App() {
   }, [applyProgress, resetProgress, useScannerForVin, vin]);
 
   useEffect(() => {
-    if (!useScannerForVin || busy || scanOpen) return;
+    if (!useScannerForVin) {
+      serialScanCursorRef.current = null;
+      return;
+    }
+    if (busy || scanOpen) return;
 
     let cancelled = false;
 
@@ -223,7 +228,13 @@ export default function App() {
       let cursor: number;
       try {
         const status = await api.getVinSerialStatus();
-        cursor = status.sequence;
+        const savedCursor = serialScanCursorRef.current;
+        // Preserve scans received between calibration completion and listener re-arm.
+        // A lower server sequence means the backend restarted, so reset the cursor.
+        cursor = savedCursor === null || status.sequence < savedCursor
+          ? status.sequence
+          : savedCursor;
+        serialScanCursorRef.current = cursor;
       } catch {
         await wait(AUTO_SCAN_RETRY_MS);
         if (!cancelled) void monitorScanner();
@@ -240,6 +251,7 @@ export default function App() {
             continue;
           }
           cursor = vinRes.sequence;
+          serialScanCursorRef.current = cursor;
 
           const scannedVin = normalizeVin(vinRes.vin || "");
           if (vinRes.ok && scannedVin) {
