@@ -79,15 +79,17 @@ async def on_startup() -> None:
 
 
 @app.post("/api/vin/scan")
-async def api_vin_scan() -> dict[str, Any]:
+async def api_vin_scan(passive: bool = False) -> dict[str, Any]:
     session = get_session()
     try:
         vin = await asyncio.to_thread(scan_vin_once)
     except VinSerialError as exc:
-        session.logs.add("error", f"VIN serial scan failed: {exc}")
+        if not passive:
+            session.logs.add("error", f"VIN serial scan failed: {exc}")
         return {"ok": False, "error": str(exc)}
     except Exception as exc:
-        session.logs.add("error", f"VIN serial scan failed: {exc}")
+        if not passive:
+            session.logs.add("error", f"VIN serial scan failed: {exc}")
         return {"ok": False, "error": str(exc)}
 
     session.logs.add("info", f"VIN serial scan ok: {vin!r}")

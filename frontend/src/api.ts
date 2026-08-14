@@ -10,8 +10,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-export async function scanVinSerial() {
-  return request<{ ok: boolean; vin?: string; error?: string }>("/vin/scan", {
+export async function scanVinSerial(passive = false) {
+  const query = passive ? "?passive=true" : "";
+  return request<{ ok: boolean; vin?: string; error?: string }>(`/vin/scan${query}`, {
     method: "POST",
   });
 }

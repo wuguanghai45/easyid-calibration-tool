@@ -97,7 +97,7 @@ npm run dev:https    # https://localhost:5173（调试浏览器摄像头扫码�
 
 **车架号（VIN）扫码**
 
-产线 Web 流程：点击 **开始标定** → 后端通过 **串口条码枪** 读取车架号（协议与 [`demo/sn_scaner_demo.py`](demo/sn_scaner_demo.py) 相同：`\\x16T\\r` 开激光、读一行、`\\x16U\\r` 关激光）→ 自动执行 IMV 标定与飞书同步。每次开始标定都会重新扫码，覆盖输入框已有内容。
+产线 Web 默认启用串口扫描器监听：扫描器读取到车架二维码后，会自动触发 IMV 标定与飞书同步，无需先点击按钮。也可以点击 **开始标定** 主动进入扫码等待。串口协议与 [`demo/sn_scaner_demo.py`](demo/sn_scaner_demo.py) 相同：`\\x16T\\r` 开激光、读一行、`\\x16U\\r` 关激光。扫码结果会覆盖输入框已有内容；取消勾选“使用扫描器获取车架号并自动触发标定”后，可改用手动输入。
 
 | 环境变量 | 默认 | 说明 |
 |----------|------|------|
@@ -173,7 +173,7 @@ type logs\web-*.log
 
 | API | 说明 |
 |-----|------|
-| `POST /api/vin/scan` | 串口扫码枪读取车架号（开始标定前调用） |
+| `POST /api/vin/scan` | 串口扫码枪读取车架号；`passive=true` 用于页面空闲监听且不记录预期的超时错误 |
 | `GET /api/devices` | 枚举设备 |
 | `POST /api/connect` | 连接 IMV + 启动 TCP/预览 |
 | `GET /api/config` / `PUT /api/config` | 读写曝光、增益等 |

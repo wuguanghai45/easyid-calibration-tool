@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import * as api from "./api";
 import {
   buildFeishuDetail,
@@ -18,10 +18,31 @@ import type { FlowStep } from "./types";
 import { VinScanDialog } from "./VinScanDialog";
 import { isVinScanUiAvailable, normalizeVin } from "./vinScanner";
 
-const IDLE_HINT_HTTP = "点击「开始标定」，将先通过扫码器读取车架号。";
+const IDLE_HINT_HTTP =
+  "扫描器读取到车架二维码后将自动开始标定；也可点击「开始标定」主动扫码。";
 const IDLE_HINT_HTTPS =
-  "点击「开始标定」，将先通过扫码器读取车架号；也可使用「扫码」调试摄像头。";
+  "扫描器读取到车架二维码后将自动开始标定；也可点击「开始标定」主动扫码，或使用「扫码」调试摄像头。";
 const IDLE_HINT_MANUAL = "点击「开始标定」，将使用手动输入的车架号。";
+const AUTO_SCAN_RETRY_MS = 500;
+
+type VinScanResponse = Awaited<ReturnType<typeof api.scanVinSerial>>;
+
+let pendingVinScan: Promise<VinScanResponse> | null = null;
+
+/** Share one serial-port scan between automatic monitoring and a manual start. */
+function scanVinSerialShared(passive: boolean): Promise<VinScanResponse> {
+  if (pendingVinScan === null) {
+    pendingVinScan = api.scanVinSerial(passive).finally(() => {
+      pendingVinScan = null;
+    });
+  }
+  return pendingVinScan;
+}
+
+/** Wait before retrying passive scanner monitoring. */
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
 
 function getIdleHint(useScanner: boolean, showVinScan: boolean): string {
   if (!useScanner) return IDLE_HINT_MANUAL;
@@ -76,6 +97,7 @@ export default function App() {
   const [hint, setHint] = useState(() => getIdleHint(true, isVinScanUiAvailable()));
   const [busy, setBusy] = useState(false);
   const [scanOpen, setScanOpen] = useState(false);
+  const calibrationRunningRef = useRef(false);
 
   useEffect(() => {
     document.body.className = uiState;
@@ -99,7 +121,9 @@ export default function App() {
     }
   };
 
-  const runCalibration = async () => {
+  const runCalibration = useCallback(async (scannedVin?: string) => {
+    if (calibrationRunningRef.current) return;
+    calibrationRunningRef.current = true;
     setBusy(true);
     resetProgress();
     setUiState("running");
@@ -109,18 +133,21 @@ export default function App() {
 
     try {
       if (useScannerForVin) {
-        setResultText("扫码中");
-        setHint("请将车架条码对准扫码器…");
+        frameNo = normalizeVin(scannedVin || "");
+        if (!frameNo) {
+          setResultText("扫码中");
+          setHint("请将车架二维码对准扫描器…");
 
-        const vinRes = await api.scanVinSerial();
-        if (!vinRes.ok || !vinRes.vin?.trim()) {
-          setUiState("failure");
-          setResultText("失败");
-          setHint(vinRes.error || "未扫到车架号，请重试。");
-          return;
+          const vinRes = await scanVinSerialShared(false);
+          if (!vinRes.ok || !vinRes.vin?.trim()) {
+            setUiState("failure");
+            setResultText("失败");
+            setHint(vinRes.error || "未扫到车架号，请重试。");
+            return;
+          }
+          frameNo = normalizeVin(vinRes.vin);
         }
 
-        frameNo = normalizeVin(vinRes.vin);
         setVin(frameNo);
         setHint("车架号已读取，正在标定…");
       } else {
@@ -197,8 +224,39 @@ export default function App() {
       setHint(`流程异常：${err instanceof Error ? err.message : String(err)}`);
     } finally {
       setBusy(false);
+      calibrationRunningRef.current = false;
     }
-  };
+  }, [applyProgress, resetProgress, useScannerForVin, vin]);
+
+  useEffect(() => {
+    if (!useScannerForVin || uiState !== "idle" || scanOpen) return;
+
+    let cancelled = false;
+
+    const monitorScanner = async () => {
+      while (!cancelled) {
+        try {
+          const vinRes = await scanVinSerialShared(true);
+          if (cancelled) return;
+
+          const scannedVin = normalizeVin(vinRes.vin || "");
+          if (vinRes.ok && scannedVin) {
+            await runCalibration(scannedVin);
+            return;
+          }
+        } catch {
+          // A passive scanner may be disconnected; keep the manual workflow available.
+        }
+
+        await wait(AUTO_SCAN_RETRY_MS);
+      }
+    };
+
+    void monitorScanner();
+    return () => {
+      cancelled = true;
+    };
+  }, [runCalibration, scanOpen, uiState, useScannerForVin]);
 
   const completedCount = progressCompletedCount(steps);
   const showProgress = uiState !== "idle";
@@ -251,10 +309,10 @@ export default function App() {
           disabled={busy}
           onChange={(e) => onToggleScannerForVin(e.target.checked)}
         />
-        使用扫描器获取车架号
+        使用扫描器获取车架号并自动触发标定
       </label>
 
-      <button type="button" disabled={busy} onClick={runCalibration}>
+      <button type="button" disabled={busy} onClick={() => void runCalibration()}>
         开始标定
       </button>
 
