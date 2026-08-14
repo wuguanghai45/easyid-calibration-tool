@@ -8,3 +8,4 @@ calibration_out
 .env
 .certs/
 logs/
+frontend/package-lock.json
