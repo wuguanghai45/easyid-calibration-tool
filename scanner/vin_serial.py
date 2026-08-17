@@ -10,24 +10,65 @@ from typing import Any, TYPE_CHECKING
 
 if TYPE_CHECKING:
     import serial
+    from serial.tools.list_ports_common import ListPortInfo
 
 TRIGGER_ON = b"\x16T\r"
 TRIGGER_OFF = b"\x16U\r"
 
-_DEFAULT_PORT = "COM8"
 _DEFAULT_BAUDRATE = 115200
 _DEFAULT_READ_TIMEOUT_S = 3.0
 _SERIAL_POLL_TIMEOUT_S = 0.5
 _RECONNECT_DELAY_S = 1.0
+_SCANNER_PORT_KEYWORDS = ("barcode", "scanner", "scan", "条码", "扫码")
 
 
 class VinSerialError(Exception):
     """Raised when waiting for serial VIN output fails."""
 
 
-def _env_port() -> str:
-    """Return the configured serial scanner port."""
-    return os.environ.get("SN_SCANNER_PORT", _DEFAULT_PORT).strip() or _DEFAULT_PORT
+def _configured_port() -> str | None:
+    """Return an explicit scanner port, or ``None`` when auto-detection is enabled."""
+    value = os.environ.get("SN_SCANNER_PORT", "").strip()
+    return None if not value or value.lower() == "auto" else value
+
+
+def _port_sort_key(port: ListPortInfo) -> tuple[int, int, str]:
+    """Rank likely barcode-scanner ports before other serial interfaces."""
+    metadata = " ".join(
+        str(value or "")
+        for value in (
+            getattr(port, "device", ""),
+            getattr(port, "description", ""),
+            getattr(port, "hwid", ""),
+            getattr(port, "manufacturer", ""),
+            getattr(port, "product", ""),
+            getattr(port, "interface", ""),
+        )
+    ).lower()
+    scanner_rank = (
+        0 if any(word in metadata for word in _SCANNER_PORT_KEYWORDS) else 1
+    )
+    usb_rank = 0 if getattr(port, "vid", None) is not None or "usb" in metadata else 1
+    natural_device = re.sub(
+        r"\d+",
+        lambda match: f"{int(match.group()):010d}",
+        port.device.lower(),
+    )
+    return scanner_rank, usb_rank, natural_device
+
+
+def _available_ports() -> list[str]:
+    """Enumerate serial ports with likely USB barcode scanners first."""
+    from serial.tools import list_ports
+
+    ports = sorted(list_ports.comports(), key=_port_sort_key)
+    return list(dict.fromkeys(port.device for port in ports if port.device))
+
+
+def _candidate_ports() -> list[str]:
+    """Return the configured port or all currently detected serial ports."""
+    configured_port = _configured_port()
+    return [configured_port] if configured_port else _available_ports()
 
 
 def _env_baudrate() -> int:
@@ -72,6 +113,7 @@ class VinSerialMonitor:
         self._sequence = 0
         self._latest: dict[str, Any] | None = None
         self._connected = False
+        self._port: str | None = None
         self._last_error: str | None = None
 
     @property
@@ -86,9 +128,14 @@ class VinSerialMonitor:
             return {
                 "connected": self._connected,
                 "sequence": self._sequence,
-                "port": _env_port(),
+                "port": self._port or _configured_port() or "auto",
                 "last_error": self._last_error,
             }
+
+    def _port_label(self) -> str:
+        """Return the active/configured port name for user-facing diagnostics."""
+        with self._condition:
+            return self._port or _configured_port() or "an auto-detected serial port"
 
     def start(self) -> None:
         """Start the background serial reader if it is not already running."""
@@ -134,7 +181,7 @@ class VinSerialMonitor:
                 if remaining <= 0:
                     detail = f" Last serial error: {self._last_error}" if self._last_error else ""
                     raise VinSerialError(
-                        f"No barcode output within {timeout:g}s on {_env_port()}."
+                        f"No barcode output within {timeout:g}s on {self._port_label()}."
                         f" Press the scanner button and try again.{detail}"
                     )
                 self._condition.wait(timeout=remaining)
@@ -162,7 +209,7 @@ class VinSerialMonitor:
                             f": {self._last_error}" if self._last_error else ""
                         )
                         raise VinSerialError(
-                            f"Serial port {_env_port()!r} unavailable{detail}"
+                            f"Serial port {self._port_label()!r} unavailable{detail}"
                         )
                     self._condition.wait(timeout=remaining)
 
@@ -171,7 +218,7 @@ class VinSerialMonitor:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     raise VinSerialError(
-                        f"No barcode within {timeout:g}s on {_env_port()}."
+                        f"No barcode within {timeout:g}s on {self._port_label()}."
                     )
                 return self.wait_for_scan(
                     after_sequence=cursor,
@@ -194,11 +241,19 @@ class VinSerialMonitor:
             }
             self._condition.notify_all()
 
-    def _set_connection(self, connected: bool, error: str | None = None) -> None:
+    def _set_connection(
+        self,
+        connected: bool,
+        error: str | None = None,
+        *,
+        port: str | None = None,
+    ) -> None:
         """Update serial connection state exposed by the status endpoint."""
         with self._condition:
             self._connected = connected
             self._last_error = error
+            if port is not None:
+                self._port = port
             self._condition.notify_all()
 
     def _write_command(self, command: bytes) -> None:
@@ -207,12 +262,14 @@ class VinSerialMonitor:
 
         with self._serial_lock:
             if self._serial is None or not self._serial.is_open:
-                raise VinSerialError(f"Serial port {_env_port()!r} is not connected.")
+                raise VinSerialError(
+                    f"Serial port {self._port_label()!r} is not connected."
+                )
             try:
                 self._serial.write(command)
             except (SerialException, OSError) as exc:
                 raise VinSerialError(
-                    f"Failed to write scanner command on {_env_port()!r}: {exc}"
+                    f"Failed to write scanner command on {self._port_label()!r}: {exc}"
                 ) from exc
 
     def _run_loop(self) -> None:
@@ -221,35 +278,57 @@ class VinSerialMonitor:
         from serial import SerialException
 
         while not self._stop.is_set():
-            scanner_port: serial.Serial | None = None
             try:
-                scanner_port = serial.Serial(
-                    _env_port(),
-                    _env_baudrate(),
-                    timeout=_SERIAL_POLL_TIMEOUT_S,
-                )
-                with self._serial_lock:
-                    self._serial = scanner_port
-                self._set_connection(True)
-
-                while not self._stop.is_set():
-                    raw_data = scanner_port.readline()
-                    if not raw_data:
-                        continue
-                    candidate = normalize_vin(raw_data.decode("utf-8", errors="ignore"))
-                    if candidate:
-                        self._publish(candidate)
+                candidates = _candidate_ports()
             except (SerialException, OSError) as exc:
-                self._set_connection(False, str(exc))
-            finally:
-                with self._serial_lock:
-                    self._serial = None
-                    if scanner_port is not None and scanner_port.is_open:
-                        try:
-                            scanner_port.close()
-                        except SerialException:
-                            pass
-                self._set_connection(False, self._last_error)
+                self._set_connection(False, f"Failed to enumerate serial ports: {exc}")
+                self._stop.wait(_RECONNECT_DELAY_S)
+                continue
+            if not candidates:
+                self._set_connection(
+                    False,
+                    "No serial ports found. Connect the barcode scanner and retry.",
+                )
+                self._stop.wait(_RECONNECT_DELAY_S)
+                continue
+
+            for port in candidates:
+                scanner_port: serial.Serial | None = None
+                opened = False
+                try:
+                    scanner_port = serial.Serial(
+                        port,
+                        _env_baudrate(),
+                        timeout=_SERIAL_POLL_TIMEOUT_S,
+                    )
+                    opened = True
+                    with self._serial_lock:
+                        self._serial = scanner_port
+                    self._set_connection(True, port=port)
+
+                    while not self._stop.is_set():
+                        raw_data = scanner_port.readline()
+                        if not raw_data:
+                            continue
+                        candidate = normalize_vin(
+                            raw_data.decode("utf-8", errors="ignore")
+                        )
+                        if candidate:
+                            self._publish(candidate)
+                except (SerialException, OSError) as exc:
+                    self._set_connection(False, str(exc), port=port)
+                finally:
+                    with self._serial_lock:
+                        self._serial = None
+                        if scanner_port is not None and scanner_port.is_open:
+                            try:
+                                scanner_port.close()
+                            except SerialException:
+                                pass
+                    self._set_connection(False, self._last_error)
+
+                if opened or self._stop.is_set():
+                    break
 
             self._stop.wait(_RECONNECT_DELAY_S)
 

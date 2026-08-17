@@ -101,11 +101,11 @@ npm run dev:https    # https://localhost:5173（调试浏览器摄像头扫码�
 
 | 环境变量 | 默认 | 说明 |
 |----------|------|------|
-| `SN_SCANNER_PORT` | `COM4` | 串口号（Windows 如 `COM4`，Linux 如 `/dev/ttyUSB0`） |
+| `SN_SCANNER_PORT` | `auto` | 自动检索串口；也可手工指定（Windows 如 `COM8`，Linux 如 `/dev/ttyUSB0`） |
 | `SN_SCANNER_BAUDRATE` | `115200` | 波特率 |
 | `SN_SCANNER_READ_TIMEOUT` | `3.0` | 开激光后等待条码的最长时间（秒） |
 
-调试：先单独运行 `python demo/sn_scaner_demo.py` 确认硬件与端口，再在 `.env` 中设置 `SN_SCANNER_PORT`。
+自动检索会优先选择名称中包含 scanner/barcode 的端口，其次选择 USB 串口；扫描器未连接或端口断开后会持续重新检索。若工控机连接了多个 USB 串口，可在 `.env` 中设置 `SN_SCANNER_PORT` 来固定扫描器端口。
 
 **浏览器摄像头扫码（可选）**
 
