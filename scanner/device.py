@@ -72,6 +72,61 @@ def _device_info_to_dict(info: IMV_DeviceInfo, index: int) -> dict[str, Any]:
     }
 
 
+def _normalize_device_identifier(value: Any) -> str:
+    """Normalize an SDK hardware identifier for stable duplicate detection."""
+    return "".join(character for character in str(value).casefold() if character.isalnum())
+
+
+def _physical_device_key(device: dict[str, Any]) -> tuple[str, str] | None:
+    """Return the strongest available identity key for one physical scanner."""
+    mac_address = _normalize_device_identifier(device.get("mac_address", ""))
+    if mac_address:
+        return ("mac", mac_address)
+
+    serial_number = _normalize_device_identifier(device.get("serial_number", ""))
+    if serial_number:
+        return ("serial", serial_number)
+
+    camera_key = _normalize_device_identifier(device.get("camera_key", ""))
+    if camera_key:
+        return ("camera_key", camera_key)
+    return None
+
+
+def _deduplicate_physical_devices(devices: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Collapse repeated SDK entries while preserving distinct physical scanners.
+
+    IMV can retain an entry for a recently closed handle and return it together
+    with the newly discovered entry. The later entry is retained because it has
+    the current enumeration index and network information. Devices without a
+    stable MAC, serial number or camera key are never collapsed.
+    """
+    deduplicated: list[dict[str, Any]] = []
+    positions: dict[tuple[str, str], int] = {}
+
+    for device in devices:
+        identity = _physical_device_key(device)
+        if identity is None or identity not in positions:
+            if identity is not None:
+                positions[identity] = len(deduplicated)
+            deduplicated.append(device)
+            continue
+
+        position = positions[identity]
+        previous = deduplicated[position]
+        deduplicated[position] = device
+        logger.warning(
+            "Collapsed duplicate IMV device entry by %s (old index=%s, new index=%s, SN=%s, MAC=%s)",
+            identity[0],
+            previous.get("index"),
+            device.get("index"),
+            device.get("serial_number") or previous.get("serial_number") or "n/a",
+            device.get("mac_address") or previous.get("mac_address") or "n/a",
+        )
+
+    return deduplicated
+
+
 def enum_devices(*, unicast_ip: str | None = None) -> list[dict[str, Any]]:
     MvCamera = _mv_camera()
     device_list = IMV_DeviceList()
@@ -86,8 +141,13 @@ def enum_devices(*, unicast_ip: str | None = None) -> list[dict[str, Any]]:
     for index in range(int(device_list.nDevNum)):
         info = device_list.pDevInfo[index]
         devices.append(_device_info_to_dict(info, index))
-    logger.info("Discovered %d device(s) via IMV SDK.", len(devices))
-    return devices
+    unique_devices = _deduplicate_physical_devices(devices)
+    logger.info(
+        "Discovered %d physical device(s) from %d IMV SDK entry/entries.",
+        len(unique_devices),
+        len(devices),
+    )
+    return unique_devices
 
 
 def _collect_local_ipv4() -> list[str]:
