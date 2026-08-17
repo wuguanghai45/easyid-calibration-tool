@@ -202,83 +202,97 @@ export async function runRealCalibration(
 
   notify(0);
 
-  const listRes = await api.listDevices();
-  if (listRes.error) {
-    return { ok: false, steps, hint: `扫描失败：${listRes.error}` };
-  }
+  try {
+    // Release the previous run before enumerating. Some IMV SDK versions expose
+    // the open handle and the physical device as two entries during a new scan.
+    await api.disconnect();
 
-  const devices = listRes.devices || [];
-  if (devices.length === 0) {
-    return { ok: false, steps, hint: "扫描失败：未发现扫码器设备。" };
-  }
-  if (devices.length > 1) {
+    const listRes = await api.listDevices();
+    if (listRes.error) {
+      return { ok: false, steps, hint: `扫描失败：${listRes.error}` };
+    }
+
+    const devices = listRes.devices || [];
+    if (devices.length === 0) {
+      return { ok: false, steps, hint: "扫描失败：未发现扫码器设备。" };
+    }
+    if (devices.length > 1) {
+      return {
+        ok: false,
+        steps,
+        hint: `扫描失败：发现 ${devices.length} 台设备，请确保仅连接一台扫码器。`,
+      };
+    }
+
+    const device: DeviceListItem = devices[0];
+    steps.push(flowStep("scan", STEP_LABELS[0], buildScanDetail(device)));
+    notify(1);
+
+    const connectRes = await api.connect({
+      sn: device.serial_number,
+      ip: device.ip_address,
+      tcp_port: 3000,
+    });
+    if (!connectRes.ok) {
+      const hintText =
+        "hint" in connectRes && typeof connectRes.hint === "string" ? connectRes.hint : "";
+      const msg = connectRes.error || "连接失败";
+      return {
+        ok: false,
+        steps,
+        hint: hintText ? `绑定失败：${msg} — ${hintText}` : `绑定失败：${msg}`,
+      };
+    }
+
+    const connectedDevice = connectRes.device ?? device;
+    steps.push(flowStep("bind", STEP_LABELS[1], buildBindDetail(connectedDevice)));
+    notify(2);
+
+    const configRes = await api.importConfig();
+    if (!configRes.ok) {
+      return {
+        ok: false,
+        steps,
+        hint: `配置失败：${configRes.error || "导入配置失败"}`,
+      };
+    }
+
+    steps.push(
+      flowStep(
+        "config",
+        STEP_LABELS[2],
+        buildConfigDetail(configRes.fields ?? [], configRes.failed_params ?? [])
+      )
+    );
+    notify(3);
+
+    const scan = await waitForScan();
+    if (!scan) {
+      return {
+        ok: false,
+        steps,
+        hint: "标定失败：30 秒内未收到扫码数据，请触发扫码后重试。",
+      };
+    }
+
+    const passed = isCalibrationPass(scan);
+    if (passed) {
+      steps.push(flowStep("calibrate", STEP_LABELS[3], buildCalibrationDetail(scan)));
+    }
+
     return {
-      ok: false,
+      ok: passed,
       steps,
-      hint: `扫描失败：发现 ${devices.length} 台设备，请确保仅连接一台扫码器。`,
+      scan,
+      hint: formatCalibrationHint(scan, passed),
     };
+  } finally {
+    // A calibration run owns the IMV handle, preview and TCP scan client. Always
+    // release all three so success, timeout and configuration errors can retry.
+    try {
+      await api.disconnect();
+    } catch {
+      // Preserve the calibration result when best-effort cleanup cannot reach the backend.
+    }
   }
-
-  const device: DeviceListItem = devices[0];
-  steps.push(flowStep("scan", STEP_LABELS[0], buildScanDetail(device)));
-  notify(1);
-
-  const connectRes = await api.connect({
-    sn: device.serial_number,
-    ip: device.ip_address,
-    tcp_port: 3000,
-  });
-  if (!connectRes.ok) {
-    const hintText =
-      "hint" in connectRes && typeof connectRes.hint === "string" ? connectRes.hint : "";
-    const msg = connectRes.error || "连接失败";
-    return {
-      ok: false,
-      steps,
-      hint: hintText ? `绑定失败：${msg} — ${hintText}` : `绑定失败：${msg}`,
-    };
-  }
-
-  const connectedDevice = connectRes.device ?? device;
-  steps.push(flowStep("bind", STEP_LABELS[1], buildBindDetail(connectedDevice)));
-  notify(2);
-
-  const configRes = await api.importConfig();
-  if (!configRes.ok) {
-    return {
-      ok: false,
-      steps,
-      hint: `配置失败：${configRes.error || "导入配置失败"}`,
-    };
-  }
-
-  steps.push(
-    flowStep(
-      "config",
-      STEP_LABELS[2],
-      buildConfigDetail(configRes.fields ?? [], configRes.failed_params ?? [])
-    )
-  );
-  notify(3);
-
-  const scan = await waitForScan();
-  if (!scan) {
-    return {
-      ok: false,
-      steps,
-      hint: "标定失败：30 秒内未收到扫码数据，请触发扫码后重试。",
-    };
-  }
-
-  const passed = isCalibrationPass(scan);
-  if (passed) {
-    steps.push(flowStep("calibrate", STEP_LABELS[3], buildCalibrationDetail(scan)));
-  }
-
-  return {
-    ok: passed,
-    steps,
-    scan,
-    hint: formatCalibrationHint(scan, passed),
-  };
 }

@@ -82,6 +82,7 @@ async def on_startup() -> None:
 @app.on_event("shutdown")
 async def on_shutdown() -> None:
     get_vin_serial_monitor().stop()
+    get_session().disconnect(log=False)
 
 
 @app.get("/api/vin/status")

@@ -163,9 +163,13 @@ class ScannerReader:
         return self.device_info
 
     def disconnect(self) -> None:
-        close_camera(self.cam)
-        self.cam = None
-        self.connected = False
+        try:
+            close_camera(self.cam)
+        finally:
+            self.cam = None
+            self.device_info = None
+            self._interface_name = None
+            self.connected = False
 
     def dump_feature_candidates(self, output_dir: Path) -> dict[str, list[str]]:
         self._ensure_connected()
