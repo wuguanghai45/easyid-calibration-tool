@@ -56,7 +56,7 @@ function flowStep(id: string, title: string, detail?: string): FlowStep {
   return detail ? { id, title, detail } : { id, title };
 }
 
-/** Map 0–360° device reading to signed offset in (-180, 180]. */
+/** Normalize an already direction-corrected robot offset to (-180°, 180°]. */
 export function normalizeThetaOffsetDeg(deg: number): number {
   if (deg > 180) return deg - 360;
   if (deg < -180) return deg + 360;

@@ -23,11 +23,16 @@ def radians_to_huaray_theta(theta_rad: float) -> int:
 
 
 def huaray_theta_to_degrees(theta: int) -> float:
-    """Camera theta unit -> signed offset degrees in (-180, 180]."""
-    deg = (int(theta) % 3600) / 10.0
-    if deg > 180:
-        deg -= 360
-    return deg
+    """Convert clockwise camera theta to robot offset degrees in (-180, 180].
+
+    The camera reports clockwise angles in 0.1-degree units, while the robot
+    coordinate system and ``cameraOffsetTheta`` use counter-clockwise angles.
+    """
+    camera_deg = (int(theta) % 3600) / 10.0
+    robot_deg = (360.0 - camera_deg) % 360.0
+    if robot_deg > 180.0:
+        robot_deg -= 360.0
+    return robot_deg
 
 
 def parse_scan_payload(text: str) -> list[dict[str, str | int]]:
